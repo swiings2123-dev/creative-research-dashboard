@@ -167,8 +167,9 @@ button[type=submit]:active { transform: scale(0.97); }
   font-size: 0.85rem;
   cursor: pointer;
   transition: border-color .15s ease, color .15s ease;
-  white-space: nowrap;
+  max-width: 100%;
 }
+.file-input span { overflow-wrap: anywhere; }
 .file-input:hover { border-color: var(--accent); color: var(--accent); }
 .file-input.has-file { border-style: solid; border-color: var(--accent); color: var(--accent); }
 
@@ -335,14 +336,29 @@ button[type=submit]:active { transform: scale(0.97); }
 
 footer { padding: 1.5rem 2rem 3rem; border-top: 1px solid var(--border); max-width: 1400px; margin: 0 auto; }
 footer summary { cursor: pointer; color: var(--muted); }
-#lookup-form { display: flex; gap: 0.5rem; margin-top: 0.7rem; }
+#lookup-form { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
 #lookup-form input, #lookup-form button {
   padding: 0.6rem 0.9rem; border-radius: 10px; border: 1px solid var(--border);
   background: var(--card); color: var(--text);
 }
+#lookup-form input { flex: 1; min-width: 200px; }
 #lookup-form button { background: var(--accent); color: white; border: none; cursor: pointer; }
 #lookup-result { margin-top: 0.7rem; font-size: 0.9rem; color: var(--muted); }
 #lookup-result a { color: var(--accent); }
+
+@media (max-width: 640px) {
+  .hero { padding: 2.5rem 1rem 2rem; }
+  .wordmark { font-size: 2rem; }
+  .tagline { font-size: 1rem; }
+  #keyword { min-width: 0; width: 100%; }
+  #product-url { min-width: 0; width: 100%; }
+  .extra-inputs { flex-direction: column; align-items: stretch; }
+  .file-input { justify-content: center; text-align: center; }
+  .grid { padding: 1.5rem 1rem 6rem; gap: 1rem; }
+  footer { padding: 1.5rem 1rem 2rem; }
+  .generate-btn { bottom: 1rem; right: 1rem; left: 1rem; text-align: center; justify-content: center; }
+  .angles-panel { padding: 1.2rem; }
+}
 
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(14px); }
