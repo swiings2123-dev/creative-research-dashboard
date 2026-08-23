@@ -1,4 +1,4 @@
 flask
-playwright
+playwright==1.62.0
 openai
 requests

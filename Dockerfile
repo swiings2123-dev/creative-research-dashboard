@@ -2,7 +2,7 @@
 # already installed correctly - trying to `playwright install` on a generic
 # python:slim image is the #1 way this breaks on a fresh host (missing
 # libnspr4/libnss3 etc.), so this avoids that class of problem entirely.
-FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.62.0-jammy
 
 WORKDIR /app
 COPY requirements.txt .
