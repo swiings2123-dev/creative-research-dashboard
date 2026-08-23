@@ -123,7 +123,15 @@ def _scroll_until_plateau(page, max_scrolls, plateau_rounds=3, wait_ms=1500):
 def _search_one(page, keyword, country, max_scrolls, timeout_ms):
     url = SEARCH_URL.format(country=country, keyword=quote(keyword))
     page.goto(url, timeout=timeout_ms)
-    page.wait_for_timeout(4000)
+    # Wait for an actual video to render rather than a fixed delay - a fixed
+    # 4s was fine on a fast dev machine but came back empty on a slower free
+    # -tier CPU (confirmed: same page needed ~12s there). If truly zero
+    # video ads exist for this query, this just falls through after the
+    # timeout with nothing to find.
+    try:
+        page.wait_for_selector("video", timeout=15000)
+    except Exception:
+        pass
     _scroll_until_plateau(page, max_scrolls)
     cards = page.evaluate(CARD_EXTRACT_JS)
     return [_parse_card(c, country) for c in cards]

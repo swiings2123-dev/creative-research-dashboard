@@ -183,32 +183,6 @@ def search():
     })
 
 
-@app.route("/debug/meta-probe")
-def debug_meta_probe():
-    """Temporary diagnostic: shows what Meta's Ad Library actually returns
-    from this server's IP (cloud/datacenter IPs are commonly detected and
-    served a block/consent page instead of real results). Remove once
-    the deployment is confirmed working."""
-    _require_secret()
-    from playwright.sync_api import sync_playwright
-    url = meta_scrape.SEARCH_URL.format(country="US", keyword="posture+corrector")
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(locale="en-US")
-        page.goto(url, timeout=45000)
-        page.wait_for_timeout(12000)
-        title = page.title()
-        final_url = page.url
-        html_len = len(page.content())
-        body_snippet = page.inner_text("body")[:1500]
-        video_count = page.evaluate("document.querySelectorAll('video').length")
-        browser.close()
-    return jsonify({
-        "title": title, "final_url": final_url, "html_len": html_len,
-        "video_count": video_count, "body_snippet": body_snippet,
-    })
-
-
 @app.route("/lookup-advertiser", methods=["POST"])
 def lookup_advertiser():
     _require_secret()
