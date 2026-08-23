@@ -195,13 +195,18 @@ def debug_meta_probe():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(locale="en-US")
-        page.goto(url, timeout=30000)
-        page.wait_for_timeout(4000)
+        page.goto(url, timeout=45000)
+        page.wait_for_timeout(12000)
         title = page.title()
+        final_url = page.url
+        html_len = len(page.content())
         body_snippet = page.inner_text("body")[:1500]
         video_count = page.evaluate("document.querySelectorAll('video').length")
         browser.close()
-    return jsonify({"title": title, "video_count": video_count, "body_snippet": body_snippet})
+    return jsonify({
+        "title": title, "final_url": final_url, "html_len": html_len,
+        "video_count": video_count, "body_snippet": body_snippet,
+    })
 
 
 @app.route("/lookup-advertiser", methods=["POST"])
