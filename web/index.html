@@ -14,6 +14,9 @@
   window.API_BASE = "https://creative-research-worker.onrender.com";
   // Must match the worker's APP_SHARED_SECRET env var exactly (see DEPLOY.md).
   window.API_SECRET = "qjFn-2LWW__8ounNZxDjcUxJYNQxL3iG";
+  // Free-tier worker CPU is throttled - even a plain search runs ~4 min here
+  // (vs ~10-30s locally). Keeps the wait from looking like a broken app.
+  window.SLOW_WORKER = true;
 </script>
 </head>
 <body>

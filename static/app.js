@@ -4,6 +4,12 @@
 const API_BASE = window.API_BASE || "";
 const API_SECRET = window.API_SECRET || "";
 const authHeaders = API_SECRET ? { "X-App-Secret": API_SECRET } : {};
+// Set true only on the deployed copy (web/index.html) when the worker runs
+// on a throttled free-tier host - a plain single-country search there can
+// take several minutes (confirmed: 245s vs ~10-30s locally), not just
+// World/picture mode. Without this flag, that would look exactly like the
+// "it's not working" complaint this app already had once.
+const SLOW_WORKER = window.SLOW_WORKER || false;
 
 const form = document.getElementById("search-form");
 const statusEl = document.getElementById("status");
@@ -104,7 +110,10 @@ function showSkeletons(isWorld, hasImageSignal) {
   if (isWorld) parts.push("searching across the world");
   else parts.push("searching");
   if (hasImageSignal) parts.push("visually verifying the product match");
-  statusEl.textContent = parts.join(", then ") + (isWorld || hasImageSignal ? " - this can take a few minutes..." : "...");
+  const slow = isWorld || hasImageSignal || SLOW_WORKER;
+  let msg = parts.join(", then ") + (slow ? " - this can take a few minutes..." : "...");
+  if (SLOW_WORKER) msg += " (running on free-tier hosting - even a plain search is slow here, this is expected)";
+  statusEl.textContent = msg;
   resultsEl.innerHTML = "";
   for (let i = 0; i < 10; i++) {
     const s = document.createElement("div");
