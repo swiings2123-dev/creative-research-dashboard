@@ -1,63 +1,54 @@
 # Deployment
 
+## Status: live
+
+- **Frontend**: https://web-zeta-ecru-61.vercel.app (Vercel, static)
+- **Worker**: https://creative-research-worker.onrender.com (Render, free tier, Docker)
+- **Source**: https://github.com/swiings2123-dev/creative-research-dashboard
+
 ## Why two hosts
 
 Vercel's serverless functions can't run this app's core feature: every search
 launches headless Chromium via Playwright, some searches run 2-3+ minutes
 (World mode, picture mode), and Vercel caps Python function size at 50MB —
 Playwright's Chromium alone blows past that, and the workaround
-(`@sparticuz/chromium`) is Node.js-only, not Python. So:
+(`@sparticuz/chromium`) is Node.js-only, not Python. So Vercel hosts the
+static frontend only; the worker (Flask + Playwright + SQLite cache) runs on
+Render, which supports Docker and long request timeouts.
 
-- **Vercel** hosts the static frontend (`web/`) — this fits it well, free.
-- **The worker** (Flask + Playwright + SQLite cache, everything in the repo
-  root) needs an always-on host that supports Docker and long requests.
+## Known tradeoff: free-tier speed
 
-## Frontend — done
+Render's free tier throttles CPU hard. A search that takes ~10-30s locally
+took **245 seconds** on the free worker during testing - confirmed correct
+results, just slow. Decision made: **staying on free tier** ($0/mo). The
+deployed frontend shows a persistent "this can take a few minutes" notice
+(`window.SLOW_WORKER = true` in `web/index.html`) so the wait doesn't look
+like a broken app.
 
-Live at **https://web-zeta-ecru-61.vercel.app** (deployed from `web/` via
-`vercel --yes`). To redeploy after editing `web/index.html` or after copying
-fresh `static/app.js` / `static/style.css` into `web/static/`:
+To upgrade later if the slowness becomes a problem: Render's cheapest paid
+tier (~$7/mo, Starter) gives dedicated CPU instead of shared/throttled -
+should bring it back near local speed. Change the plan on the service (API
+or dashboard), then remove `window.SLOW_WORKER = true` from `web/index.html`
+and redeploy (`cd web && vercel --yes` then `vercel promote <url> --yes`).
 
+## Redeploying after changes
+
+**Frontend** (after editing `web/index.html`, or after `static/app.js` /
+`static/style.css` change - copy them into `web/static/` first):
 ```
 cd web
 vercel --yes
+vercel promote <the preview URL it prints> --yes
 ```
 
-## Worker — needs your account, here's exactly how
-
-Render is the recommended host: supports Docker (so Playwright's system
-dependencies install correctly via the official `mcr.microsoft.com/playwright/python`
-base image already set up in `Dockerfile`), and long request timeouts (set to
-300s in the Dockerfile's gunicorn command). Any host that runs a Docker
-container (Railway, Fly.io) works the same way if you'd rather use one of
-those instead.
-
-1. Push this repo to GitHub (git is already initialized locally, nothing
-   committed yet):
-   ```
-   git add -A
-   git commit -m "Initial commit"
-   git remote add origin <your-new-github-repo-url>
-   git push -u origin main
-   ```
-2. On Render: New → Blueprint → connect the repo. It'll read `render.yaml`
-   automatically.
-3. Set these env vars in Render's dashboard (marked `sync: false` in
-   `render.yaml` because secrets don't belong in a committed file):
-   - `OPENAI_API_KEY` — your key
-   - `APP_SHARED_SECRET` — use exactly this value (already embedded in
-     `web/index.html`'s `window.API_SECRET`, so the two sides match without
-     you having to redeploy the frontend):
-     ```
-     qjFn-2LWW__8ounNZxDjcUxJYNQxL3iG
-     ```
-4. Deploy. Render gives you a URL like `https://creative-research-worker.onrender.com`.
-5. Open `web/index.html`, replace `window.API_BASE` with that real URL, then
-   redeploy the frontend (`cd web && vercel --yes`).
-6. Free-tier note: Render's free web services spin down after inactivity —
-   the first request after idling can take 30-60s to wake up. Fine for a
-   personal research tool, worth knowing so a slow first search doesn't look
-   broken.
+**Worker** (after editing any root-level Python file): just `git push` -
+`autoDeploy` is on, Render redeploys automatically on every push to `master`.
+To force one immediately without waiting for the webhook:
+```
+curl -X POST -H "Authorization: Bearer <RENDER_API_KEY>" \
+  -H "Content-Type: application/json" \
+  https://api.render.com/v1/services/srv-da5h0f0jo6nc73chnko0/deploys -d '{}'
+```
 
 ## Security note (read this before sharing the URL)
 
@@ -66,6 +57,8 @@ it's embedded in `web/index.html`'s source, so anyone who views-source on the
 deployed frontend can read it and call the worker directly. That's an
 accepted tradeoff for a personal tool with no full login system, but don't
 treat the URL as safe to post publicly: anyone with the secret can burn your
-OpenAI credits and use your server to scrape Meta/TikTok/Google. Rotate
-`APP_SHARED_SECRET` (regenerate, update both sides) if you ever suspect it
-leaked.
+OpenAI credits and use your server to scrape Meta/TikTok/Google. Rotate it
+(regenerate, update both the Render env var and `web/index.html`, redeploy
+both sides) if you ever suspect it leaked. Current value is in the Render
+dashboard's env vars and in `web/index.html` - not repeated here since this
+file is public in the repo.
