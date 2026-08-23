@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: creative-research-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: OPENAI_VISION_MODEL
+        value: gpt-4o
+      - key: APP_SHARED_SECRET
+        sync: false
+      - key: ALLOWED_ORIGIN
+        value: https://web-zeta-ecru-61.vercel.app

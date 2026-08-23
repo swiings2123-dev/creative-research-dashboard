@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Creative Research</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<script>
+  // Points this static frontend at the worker (the Flask/Playwright backend,
+  // deployed separately - Vercel itself cannot run the scraper, see SETUP.md).
+  // Replace with your worker's real URL once it's deployed; redeploy after.
+  window.API_BASE = "https://YOUR-WORKER-URL.onrender.com";
+  // Must match the worker's APP_SHARED_SECRET env var exactly (see DEPLOY.md).
+  window.API_SECRET = "qjFn-2LWW__8ounNZxDjcUxJYNQxL3iG";
+</script>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="wordmark">Creative Research</div>
+      <p class="tagline">Find every running video ad for a product, worldwide.</p>
+
+      <form id="search-form" class="search-bar">
+        <input type="text" id="keyword" placeholder="Search a product or niche — e.g. posture corrector — not your own brand name" autocomplete="off">
+        <select id="country">
+          <option value="US" selected>🇺🇸 United States</option>
+          <option value="WORLD">🌍 Around the World (slower, ~2-3 min)</option>
+          <option value="GB">🇬🇧 United Kingdom</option>
+          <option value="AE">🇦🇪 UAE (Dubai)</option>
+          <option value="CN">🇨🇳 China</option>
+          <option value="IN">🇮🇳 India</option>
+          <option value="AU">🇦🇺 Australia</option>
+          <option value="CA">🇨🇦 Canada</option>
+          <option value="SA">🇸🇦 Saudi Arabia</option>
+          <option value="DE">🇩🇪 Germany</option>
+          <option value="PH">🇵🇭 Philippines</option>
+          <option value="ID">🇮🇩 Indonesia</option>
+          <option value="BR">🇧🇷 Brazil</option>
+          <option value="MX">🇲🇽 Mexico</option>
+        </select>
+        <button type="submit">Search</button>
+      </form>
+
+      <p class="combine-hint">All three below are optional — use any one, or combine them for the most accurate match.</p>
+      <div class="extra-inputs">
+        <input type="text" id="product-url" placeholder="🔗 Product link (optional) — fetches title/photo automatically">
+        <label class="file-input">
+          <input type="file" id="product-image" accept="image/*" hidden>
+          <span id="product-image-label">🖼️ Product photo (optional) — matches this exact product</span>
+        </label>
+      </div>
+
+      <div class="options-row">
+        <label><input type="checkbox" id="src-meta" checked> Meta</label>
+        <label><input type="checkbox" id="src-tiktok"> TikTok <span class="badge-exp">experimental</span></label>
+      </div>
+
+      <div class="chips">
+        <span class="chips-label">Try:</span>
+        <button type="button" class="chip">posture corrector</button>
+        <button type="button" class="chip">led strip lights</button>
+        <button type="button" class="chip">portable blender</button>
+        <button type="button" class="chip">pet grooming glove</button>
+        <button type="button" class="chip">resistance bands</button>
+      </div>
+    </div>
+  </header>
+
+  <section id="status" class="status"></section>
+  <section id="results" class="grid"></section>
+
+  <section id="angles-panel" class="angles-panel hidden">
+    <div class="angles-header">
+      <h2>AI creative angles</h2>
+      <button id="angles-close" class="icon-btn">✕</button>
+    </div>
+    <pre id="angles-content"></pre>
+  </section>
+
+  <footer>
+    <details>
+      <summary>Check a competitor's Google ads (lookup by domain, not keyword)</summary>
+      <form id="lookup-form">
+        <input type="text" id="domain" placeholder="e.g. competitor.com" required>
+        <button type="submit">Check</button>
+      </form>
+      <div id="lookup-result"></div>
+    </details>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

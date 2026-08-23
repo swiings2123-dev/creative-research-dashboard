@@ -1,0 +1,21 @@
+# Playwright's official image ships Chromium + every system library it needs
+# already installed correctly - trying to `playwright install` on a generic
+# python:slim image is the #1 way this breaks on a fresh host (missing
+# libnspr4/libnss3 etc.), so this avoids that class of problem entirely.
+FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt gunicorn
+
+COPY . .
+
+ENV PORT=8000
+EXPOSE 8000
+
+# --timeout 300: World-mode and picture-mode searches run several minutes -
+# gunicorn's 30s default worker timeout would kill them mid-request.
+# -w 1: one worker - each request may hold a full Chromium instance in
+# memory, more workers needs proportionally more RAM on whatever plan runs
+# this.
+CMD gunicorn -w 1 -b 0.0.0.0:$PORT --timeout 300 app:app
