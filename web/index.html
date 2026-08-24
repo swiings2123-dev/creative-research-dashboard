@@ -15,9 +15,9 @@
   window.API_BASE = "https://creative-research-worker.onrender.com";
   // Must match the worker's APP_SHARED_SECRET env var exactly (see DEPLOY.md).
   window.API_SECRET = "qjFn-2LWW__8ounNZxDjcUxJYNQxL3iG";
-  // Free-tier worker CPU is throttled - even a plain search runs ~4 min here
-  // (vs ~10-30s locally). Keeps the wait from looking like a broken app.
-  window.SLOW_WORKER = true;
+  // Worker is on Render's Starter plan (dedicated CPU) - confirmed ~16s for
+  // a plain search, no longer needs the "this is slow" framing.
+  window.SLOW_WORKER = false;
 </script>
 </head>
 <body>
@@ -58,7 +58,7 @@
 
       <div class="options-row">
         <label><input type="checkbox" id="src-meta" checked> Meta</label>
-        <label><input type="checkbox" id="src-tiktok"> TikTok <span class="badge-exp">experimental</span></label>
+        <label title="TikTok blocks automated requests from cloud servers (confirmed: HTTP 403). Selecting this finds nothing until a proxy is added."><input type="checkbox" id="src-tiktok" disabled> TikTok <span class="badge-exp">blocked by TikTok</span></label>
       </div>
 
       <div class="chips">

@@ -16,20 +16,44 @@ Playwright's Chromium alone blows past that, and the workaround
 static frontend only; the worker (Flask + Playwright + SQLite cache) runs on
 Render, which supports Docker and long request timeouts.
 
-## Known tradeoff: free-tier speed
+## Status: upgraded to Starter (~16s/search, confirmed)
 
-Render's free tier throttles CPU hard. A search that takes ~10-30s locally
-took **245 seconds** on the free worker during testing - confirmed correct
-results, just slow. Decision made: **staying on free tier** ($0/mo). The
-deployed frontend shows a persistent "this can take a few minutes" notice
-(`window.SLOW_WORKER = true` in `web/index.html`) so the wait doesn't look
-like a broken app.
+Started on free tier, which throttled CPU hard enough that a plain search
+took 245s (vs ~10-30s locally) and a deploy once failed outright (gunicorn
+took 4 min to boot, Render's port scanner gave up after 11 more minutes -
+classic resource starvation, not a code bug). Upgraded the service to
+Render's **Starter** plan via the API once a payment method was added to
+the account - confirmed via direct test: a fresh search now takes **~16s**,
+matching local speed. `window.SLOW_WORKER` is now `false` in
+`web/index.html` accordingly. Render's pricing is workspace-plan-based now
+(not a flat ~$7/mo per service like it used to be) - check the account's
+actual Render billing page for the current total, since that changes.
 
-To upgrade later if the slowness becomes a problem: Render's cheapest paid
-tier (~$7/mo, Starter) gives dedicated CPU instead of shared/throttled -
-should bring it back near local speed. Change the plan on the service (API
-or dashboard), then remove `window.SLOW_WORKER = true` from `web/index.html`
-and redeploy (`cd web && vercel --yes` then `vercel promote <url> --yes`).
+World mode (multi-country) and picture-mode (per-ad vision API calls) are
+still genuinely slow regardless of instance tier - that's inherent to doing
+more scraping/API work, not CPU throttling, so the frontend still shows a
+"this takes a few minutes" notice for those two specifically.
+
+## "At least 50 creatives" - auto-boost
+
+A single-country Meta search that comes up short of 50 results
+automatically tops up from a few more markets (GB, CA, AU) before
+returning - see `MIN_TARGET_RESULTS` / `BOOST_COUNTRIES` in `app.py`. Most
+searches never trigger this (already 50+ from one country); confirmed live:
+a thin keyword ("portable blender") went 24 (US) -> 51 (US+GB+CA) in ~50s.
+
+## TikTok: confirmed blocked, not a bug to keep chasing
+
+TikTok Creative Center returns **HTTP 403** (a ~39-byte empty page) to
+Render's server IP - confirmed via direct diagnostic. This is TikTok
+actively blocking datacenter/cloud traffic, not a wrong selector or a
+parsing issue. Getting past that properly requires paid residential
+proxies (real recurring cost), which wasn't in scope for a "cheapest way"
+build - the TikTok checkbox is disabled in the UI with an explanation
+rather than silently failing. Instagram video ads are NOT similarly
+missing - they're already included in every Meta result, since Instagram
+ads are served from the same Meta Ad Library (Facebook + Instagram +
+Messenger all one system), no separate integration needed.
 
 ## Redeploying after changes
 
