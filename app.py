@@ -36,6 +36,11 @@ db.init_db()
 # unaffected.
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
+# "At least 50 creatives" target: if a single-country Meta search comes up
+# short, we top up from these markets before giving up (see /search).
+MIN_TARGET_RESULTS = 50
+BOOST_COUNTRIES = ["GB", "CA", "AU"]
+
 
 @app.after_request
 def _add_cors_headers(resp):
@@ -171,6 +176,23 @@ def search():
             results.extend(r)
             if err:
                 errors[source] = err
+
+    # If a single-country Meta search came up short of the target, silently
+    # top up from a few more major markets instead of making the user
+    # switch to World mode - only pays the extra latency for keywords that
+    # are genuinely thin in one country; most searches never hit this.
+    if "meta" in sources and country != "WORLD":
+        meta_count = sum(1 for r in results if r.get("platform") == "meta")
+        if meta_count < MIN_TARGET_RESULTS:
+            existing_ids = {r["library_id"] for r in results if r.get("library_id")}
+            for boost_country in BOOST_COUNTRIES:
+                if boost_country == country or meta_count >= MIN_TARGET_RESULTS:
+                    continue
+                r, err = _cached_search("meta", meta_scrape.search, resolved_keyword, boost_country, boost_country)
+                new = [x for x in r if x.get("library_id") not in existing_ids]
+                results.extend(new)
+                existing_ids.update(x["library_id"] for x in new if x.get("library_id"))
+                meta_count += len(new)
 
     results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 
