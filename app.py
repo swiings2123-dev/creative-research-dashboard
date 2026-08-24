@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from flask import Flask, render_template, request, jsonify, abort
 
@@ -144,23 +145,32 @@ def search():
             "notes": notes,
         }), 400
 
-    results = []
-    errors = {}
-
+    # Meta and TikTok are independent scrapes (separate Chromium instances) -
+    # running them in parallel threads instead of one-after-another roughly
+    # halves wall time when both sources are selected, at no extra cost
+    # (same CPU work, just overlapped instead of serialized).
+    jobs = {}
     if "meta" in sources:
         if country == "WORLD":
-            r, err = _cached_search("meta", meta_scrape.search_world, resolved_keyword, "WORLD")
+            jobs["meta"] = (meta_scrape.search_world, "WORLD")
         else:
-            r, err = _cached_search("meta", meta_scrape.search, resolved_keyword, country, country)
-        results.extend(r)
-        if err:
-            errors["meta"] = err
-
+            jobs["meta"] = (meta_scrape.search, country, country)
     if "tiktok" in sources:
-        r, err = _cached_search("tiktok", tiktok_scrape.search, resolved_keyword, country)
-        results.extend(r)
-        if err:
-            errors["tiktok"] = err
+        jobs["tiktok"] = (tiktok_scrape.search, country)
+
+    results = []
+    errors = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as ex:
+        futures = {
+            ex.submit(_cached_search, source, spec[0], resolved_keyword, *spec[1:]): source
+            for source, spec in jobs.items()
+        }
+        for fut in as_completed(futures):
+            source = futures[fut]
+            r, err = fut.result()
+            results.extend(r)
+            if err:
+                errors[source] = err
 
     results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 
