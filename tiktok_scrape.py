@@ -30,7 +30,9 @@ def search(keyword, timeout_ms=25000):
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(locale="en-US", viewport={"width": 1440, "height": 900})
-        page.goto(url, timeout=timeout_ms)
+        response = page.goto(url, timeout=timeout_ms)
+        resp_status = response.status if response else None
+        resp_url = page.url
 
         for text in _DISMISS_TEXTS:
             try:
@@ -60,8 +62,11 @@ def search(keyword, timeout_ms=25000):
                     bodySnippet: document.body.innerText.slice(0, 300),
                     videoTagCount: document.querySelectorAll('video').length,
                     iframeCount: document.querySelectorAll('iframe').length,
+                    htmlLen: document.documentElement.outerHTML.length,
                 })"""
             )
+            diag["httpStatus"] = resp_status
+            diag["finalUrl"] = resp_url
             browser.close()
             raise RuntimeError(f"0 videos found - page diagnostic: {diag}")
 
