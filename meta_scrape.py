@@ -28,6 +28,16 @@ WORLD_COUNTRIES = [
     "US", "GB", "AE", "CN", "IN", "AU", "CA", "SA", "DE", "PH", "ID", "BR", "MX",
 ]
 
+# Standard headless-in-Docker flags: don't touch network/page behavior (so
+# they can't cause the "blocked media hides the card" bug the resource-
+# blocking attempt hit), only Chromium's own internal resource use. Real
+# lever for the production OOM/mid-request-restart crash: --disable-dev-
+# shm-usage avoids the tiny default /dev/shm size Docker containers get
+# (a very common headless-Chromium-in-Docker crash cause), --disable-gpu
+# skips GPU process overhead that's dead weight with no GPU in the
+# container anyway.
+CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--disable-gpu"]
+
 # ponytail: DOM walk finds the ad-card boundary by watching innerText length
 # jump sharply once we cross from a single card into the results grid.
 # Facebook's class names are hashed/unstable, this text-based heuristic is
@@ -120,6 +130,17 @@ def _scroll_until_plateau(page, max_scrolls, plateau_rounds=3, wait_ms=1500):
     return prev_count
 
 
+# Tried blocking video/image network requests to cut Chromium's memory
+# footprint (we only read the src/poster URL *attributes*, never the actual
+# bytes) - reverted: confirmed the page's own JS hides/unmounts an ad card
+# when its video fails to load (an error-handling UX pattern), so blocking
+# "media" alone dropped a reliable 80-94 result search to 0. Real bug, not
+# a maybe - reproduced twice. Do not re-add without re-verifying against a
+# live search that results still come back non-empty.
+def _new_page(browser):
+    return browser.new_page(locale="en-US")
+
+
 def _search_one(page, keyword, country, max_scrolls, timeout_ms):
     url = SEARCH_URL.format(country=country, keyword=quote(keyword))
     page.goto(url, timeout=timeout_ms)
@@ -150,8 +171,8 @@ def _dedupe(cards):
 def search(keyword, country="US", max_scrolls=12, timeout_ms=30000):
     """Deep single-country search: scrolls until no new ads load."""
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(locale="en-US")
+        browser = p.chromium.launch(args=CHROMIUM_ARGS)
+        page = _new_page(browser)
         cards = _search_one(page, keyword, country, max_scrolls, timeout_ms)
         browser.close()
     return _dedupe(cards)
@@ -166,8 +187,8 @@ def search_world(keyword, countries=None, max_scrolls_per_country=6, timeout_ms=
     countries = countries or WORLD_COUNTRIES
     all_cards = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(locale="en-US")
+        browser = p.chromium.launch(args=CHROMIUM_ARGS)
+        page = _new_page(browser)
         for country in countries:
             try:
                 all_cards.extend(

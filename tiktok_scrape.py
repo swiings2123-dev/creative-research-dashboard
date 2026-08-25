@@ -15,6 +15,8 @@ without needing direct network access to TikTok to debug it.
 from urllib.parse import quote
 from playwright.sync_api import sync_playwright
 
+CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--disable-gpu"]
+
 SEARCH_URL = (
     "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en"
     "?period=180&keyword={keyword}"
@@ -28,7 +30,7 @@ _DISMISS_TEXTS = ["Accept all", "Accept All", "I Accept", "Got it", "Allow all"]
 def search(keyword, timeout_ms=25000):
     url = SEARCH_URL.format(keyword=quote(keyword))
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(args=CHROMIUM_ARGS)
         page = browser.new_page(locale="en-US", viewport={"width": 1440, "height": 900})
         response = page.goto(url, timeout=timeout_ms)
         resp_status = response.status if response else None
