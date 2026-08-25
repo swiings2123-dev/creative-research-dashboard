@@ -181,18 +181,41 @@ def search():
     # top up from a few more major markets instead of making the user
     # switch to World mode - only pays the extra latency for keywords that
     # are genuinely thin in one country; most searches never hit this.
+    # Cache-hit boost countries are folded in for free; only the actual
+    # cache-misses launch a browser, and those run in parallel instead of
+    # one-after-another (was the biggest remaining latency source - up to
+    # 3 sequential ~15-20s scrapes, now overlapped).
     if "meta" in sources and country != "WORLD":
         meta_count = sum(1 for r in results if r.get("platform") == "meta")
         if meta_count < MIN_TARGET_RESULTS:
             existing_ids = {r["library_id"] for r in results if r.get("library_id")}
+            need_scrape = []
             for boost_country in BOOST_COUNTRIES:
-                if boost_country == country or meta_count >= MIN_TARGET_RESULTS:
+                if boost_country == country:
                     continue
-                r, err = _cached_search("meta", meta_scrape.search, resolved_keyword, boost_country, boost_country)
-                new = [x for x in r if x.get("library_id") not in existing_ids]
-                results.extend(new)
-                existing_ids.update(x["library_id"] for x in new if x.get("library_id"))
-                meta_count += len(new)
+                cached = db.get_cached("meta", resolved_keyword, boost_country)
+                if cached is not None:
+                    new = [x for x in cached if x.get("library_id") not in existing_ids]
+                    results.extend(new)
+                    existing_ids.update(x["library_id"] for x in new if x.get("library_id"))
+                    meta_count += len(new)
+                elif meta_count < MIN_TARGET_RESULTS:
+                    need_scrape.append(boost_country)
+
+            if meta_count < MIN_TARGET_RESULTS and need_scrape:
+                with ThreadPoolExecutor(max_workers=len(need_scrape)) as ex:
+                    boost_futures = {
+                        ex.submit(_cached_search, "meta", meta_scrape.search, resolved_keyword, bc, bc): bc
+                        for bc in need_scrape
+                    }
+                    for fut in as_completed(boost_futures):
+                        r, err = fut.result()
+                        new = [x for x in r if x.get("library_id") not in existing_ids]
+                        results.extend(new)
+                        existing_ids.update(x["library_id"] for x in new if x.get("library_id"))
+                        meta_count += len(new)
+                        if err:
+                            errors[f"meta_boost_{boost_futures[fut]}"] = err
 
     results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 

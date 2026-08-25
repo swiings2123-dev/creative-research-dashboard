@@ -230,6 +230,27 @@ button[type=submit]:active { transform: scale(0.97); }
   vertical-align: -2px;
 }
 
+.platform-filter {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 1.2rem 1.5rem 0;
+}
+.filter-tab {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  border-radius: 980px;
+  padding: 0.45rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.filter-tab:hover { border-color: var(--accent); }
+.filter-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
@@ -263,6 +284,8 @@ button[type=submit]:active { transform: scale(0.97); }
 
 .card-body { padding: 0.9rem 1rem 1.1rem; }
 .card-body .platform { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+.card-body .platform-meta { color: var(--accent); }
+.card-body .platform-tiktok { color: #d6336c; }
 .card-body .advertiser { font-weight: 600; font-size: 0.95rem; margin-top: 0.15rem; }
 
 .pill-row { display: flex; gap: 0.4rem; margin-top: 0.5rem; flex-wrap: wrap; }

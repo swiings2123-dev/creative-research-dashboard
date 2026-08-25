@@ -76,6 +76,7 @@ form.addEventListener("submit", async (e) => {
     if (data.notes && data.notes.length) msg += " (" + data.notes.join(" | ") + ")";
     statusEl.textContent = msg;
     resultsEl.innerHTML = "";
+    platformFilterEl.classList.add("hidden");
     return;
   }
 
@@ -98,14 +99,61 @@ form.addEventListener("submit", async (e) => {
   statusEl.textContent = statusText;
 
   lastResults = data.results;
-  resultsEl.innerHTML = "";
-  data.results.forEach((ad, i) => resultsEl.appendChild(renderCard(ad, i)));
+  renderPlatformFilter(data.results);
+  renderResults(data.results);
 
   if (data.results.length > 0) showGenerateButton();
 });
 
+// Meta's public Ad Library has no scrapable per-ad signal for Facebook vs
+// Instagram specifically (checked: platform icons are unlabeled CSS/sprite
+// graphics, no alt text or data attributes) - "Meta" here always means
+// both combined, that's the honest limit of what's extractable.
+const PLATFORM_LABELS = {
+  meta: "Meta (Facebook + Instagram)",
+  tiktok: "TikTok",
+};
+const platformFilterEl = document.getElementById("platform-filter");
+let activePlatformFilter = "all";
+
+function renderPlatformFilter(results) {
+  const counts = {};
+  results.forEach((ad) => { counts[ad.platform] = (counts[ad.platform] || 0) + 1; });
+  const platforms = Object.keys(counts);
+  if (platforms.length < 2) {
+    platformFilterEl.classList.add("hidden");
+    platformFilterEl.innerHTML = "";
+    activePlatformFilter = "all";
+    return;
+  }
+  activePlatformFilter = "all";
+  platformFilterEl.classList.remove("hidden");
+  const tabs = [{ key: "all", label: `All (${results.length})` }].concat(
+    platforms.map((p) => ({ key: p, label: `${PLATFORM_LABELS[p] || p} (${counts[p]})` }))
+  );
+  platformFilterEl.innerHTML = tabs
+    .map((t) => `<button type="button" class="filter-tab${t.key === "all" ? " active" : ""}" data-platform="${t.key}">${t.label}</button>`)
+    .join("");
+  platformFilterEl.querySelectorAll(".filter-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activePlatformFilter = btn.dataset.platform;
+      platformFilterEl.querySelectorAll(".filter-tab").forEach((b) => b.classList.toggle("active", b === btn));
+      const filtered = activePlatformFilter === "all"
+        ? lastResults
+        : lastResults.filter((ad) => ad.platform === activePlatformFilter);
+      renderResults(filtered);
+    });
+  });
+}
+
+function renderResults(results) {
+  resultsEl.innerHTML = "";
+  results.forEach((ad, i) => resultsEl.appendChild(renderCard(ad, i)));
+}
+
 function showSkeletons(isWorld, hasImageSignal) {
   statusEl.classList.add("loading");
+  platformFilterEl.classList.add("hidden");
   const parts = [];
   if (isWorld) parts.push("searching across the world");
   else parts.push("searching");
@@ -151,7 +199,7 @@ function renderCard(ad, index) {
   body.className = "card-body";
   const variantsPill = ad.variant_count > 1 ? `<span class="pill variants">×${ad.variant_count} variants</span>` : "";
   body.innerHTML = `
-    <div class="platform">${ad.platform}${ad.country && ad.country !== "US" ? " · " + ad.country : ""}</div>
+    <div class="platform platform-${ad.platform}">${(PLATFORM_LABELS[ad.platform] || ad.platform)}${ad.country && ad.country !== "US" ? " · " + ad.country : ""}</div>
     <div class="advertiser">${escapeHtml(ad.advertiser || "Unknown")}</div>
     <div class="pill-row">${statusPill(ad.days_running)}${variantsPill}</div>
     <div class="body-text">${escapeHtml(ad.body || "")}</div>
