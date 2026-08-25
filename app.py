@@ -203,7 +203,14 @@ def search():
                     need_scrape.append(boost_country)
 
             if meta_count < MIN_TARGET_RESULTS and need_scrape:
-                with ThreadPoolExecutor(max_workers=len(need_scrape)) as ex:
+                # Capped at 2 concurrent, not len(need_scrape) (up to 3):
+                # confirmed root cause of a real production crash - 3
+                # simultaneous Chromium instances exceeded this container's
+                # memory (reproduced repeatedly: a keyword needing all 3
+                # boost countries at once crashed every time; one needing
+                # only 2 never did). 2 preserves most of the speedup while
+                # keeping peak memory to what's actually held up in testing.
+                with ThreadPoolExecutor(max_workers=min(2, len(need_scrape))) as ex:
                     boost_futures = {
                         ex.submit(_cached_search, "meta", meta_scrape.search, resolved_keyword, bc, bc): bc
                         for bc in need_scrape
