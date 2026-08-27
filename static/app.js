@@ -67,8 +67,24 @@ form.addEventListener("submit", async (e) => {
   sources.forEach((s) => formData.append("sources", s));
   if (productImageInput.files[0]) formData.append("product_image", productImageInput.files[0]);
 
-  const res = await fetch(API_BASE + "/search", { method: "POST", headers: authHeaders, body: formData });
-  const data = await res.json();
+  let data;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 240000);
+    const res = await fetch(API_BASE + "/search", {
+      method: "POST", headers: authHeaders, body: formData, signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    data = await res.json();
+  } catch (err) {
+    statusEl.classList.remove("loading");
+    statusEl.textContent = err.name === "AbortError"
+      ? "Timed out waiting for a response - the server may be overloaded, try again in a minute."
+      : "Search failed: could not reach the server. Try again in a minute.";
+    resultsEl.innerHTML = "";
+    platformFilterEl.classList.add("hidden");
+    return;
+  }
 
   if (data.error) {
     statusEl.classList.remove("loading");
