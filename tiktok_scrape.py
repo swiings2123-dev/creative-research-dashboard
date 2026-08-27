@@ -17,7 +17,7 @@ import requests
 RUN_URL = "https://api.apify.com/v2/actors/lexis-solutions~tiktok-ads-scraper/run-sync-get-dataset-items"
 
 
-def search(keyword, max_pages=1, timeout_s=110):
+def search(keyword, max_pages=1, timeout_s=180):
     token = os.environ.get("APIFY_TOKEN")
     if not token:
         raise RuntimeError("APIFY_TOKEN not set")
