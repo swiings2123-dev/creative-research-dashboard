@@ -38,8 +38,15 @@ ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
 # "At least 50 creatives" target: if a single-country Meta search comes up
 # short, we top up from these markets before giving up (see /search).
+# 5 candidate markets, but never run more than 2 Chromium instances at
+# once (BOOST_CONCURRENCY below) - confirmed by repeated reproduction that
+# 3 simultaneous browsers OOMs this host, 2 never did. More candidates
+# still means more total coverage/redundancy, just fetched 2-at-a-time
+# instead of all-at-once - each is merged in and deduped by library_id as
+# it completes, and the whole pass stops early once the target is met.
 MIN_TARGET_RESULTS = 50
-BOOST_COUNTRIES = ["GB", "CA", "AU"]
+BOOST_COUNTRIES = ["GB", "CA", "AU", "AE", "DE"]
+BOOST_CONCURRENCY = 2
 
 
 @app.after_request
@@ -203,14 +210,20 @@ def search():
                     need_scrape.append(boost_country)
 
             if meta_count < MIN_TARGET_RESULTS and need_scrape:
-                # Capped at 2 concurrent, not len(need_scrape) (up to 3):
-                # confirmed root cause of a real production crash - 3
-                # simultaneous Chromium instances exceeded this container's
-                # memory (reproduced repeatedly: a keyword needing all 3
-                # boost countries at once crashed every time; one needing
-                # only 2 never did). 2 preserves most of the speedup while
-                # keeping peak memory to what's actually held up in testing.
-                with ThreadPoolExecutor(max_workers=min(2, len(need_scrape))) as ex:
+                # Capped at BOOST_CONCURRENCY (2), not len(need_scrape) (up
+                # to 5): confirmed root cause of a real production crash -
+                # 3 simultaneous Chromium instances exceeded this
+                # container's memory (reproduced repeatedly: a keyword
+                # needing all 3 boost countries at once crashed every time,
+                # one needing only 2 never did). 2 preserves most of the
+                # speedup while keeping peak memory to what's actually
+                # held up in testing. With 5 candidates now instead of 3,
+                # early-cancel once the target's met so we don't burn time
+                # scraping countries whose results we'll never need - a
+                # not-yet-started future cancels cleanly; one already
+                # running just finishes naturally, its results still get
+                # folded in for free.
+                with ThreadPoolExecutor(max_workers=min(BOOST_CONCURRENCY, len(need_scrape))) as ex:
                     boost_futures = {
                         ex.submit(_cached_search, "meta", meta_scrape.search, resolved_keyword, bc, bc): bc
                         for bc in need_scrape
@@ -223,6 +236,10 @@ def search():
                         meta_count += len(new)
                         if err:
                             errors[f"meta_boost_{boost_futures[fut]}"] = err
+                        if meta_count >= MIN_TARGET_RESULTS:
+                            for pending in boost_futures:
+                                pending.cancel()
+                            break
 
     results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 
