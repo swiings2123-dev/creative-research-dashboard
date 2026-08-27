@@ -42,18 +42,21 @@ returning - see `MIN_TARGET_RESULTS` / `BOOST_COUNTRIES` in `app.py`. Most
 searches never trigger this (already 50+ from one country); confirmed live:
 a thin keyword ("portable blender") went 24 (US) -> 51 (US+GB+CA) in ~50s.
 
-## TikTok: confirmed blocked, not a bug to keep chasing
+## TikTok: now via Apify, not self-hosted scraping
 
-TikTok Creative Center returns **HTTP 403** (a ~39-byte empty page) to
-Render's server IP - confirmed via direct diagnostic. This is TikTok
-actively blocking datacenter/cloud traffic, not a wrong selector or a
-parsing issue. Getting past that properly requires paid residential
-proxies (real recurring cost), which wasn't in scope for a "cheapest way"
-build - the TikTok checkbox is disabled in the UI with an explanation
-rather than silently failing. Instagram video ads are NOT similarly
-missing - they're already included in every Meta result, since Instagram
-ads are served from the same Meta Ad Library (Facebook + Instagram +
-Messenger all one system), no separate integration needed.
+TikTok Creative Center used to return **HTTP 403** (a ~39-byte empty page)
+to Render's server IP - confirmed via direct diagnostic, TikTok actively
+blocking datacenter/cloud traffic, not a wrong selector. Rather than pay
+for residential proxies to get past that ourselves, `tiktok_scrape.py` now
+calls Apify's `lexis-solutions/tiktok-ads-scraper` actor (real TikTok Ads
+Library data - runs on Apify's infra, unaffected by the block). Requires
+`APIFY_TOKEN` (Render env var + local `.env`). Costs real money per ad
+scraped (roughly $0.001-0.005/ad depending on Apify plan tier at the time -
+their pricing has moved around across 2026, check the actor's current rate
+before assuming a number) - unlike Meta, this isn't a $0 integration
+anymore. Instagram video ads are NOT missing separately - they're already
+included in every Meta result, since Instagram ads are served from the
+same Meta Ad Library (Facebook + Instagram + Messenger all one system).
 
 ## Redeploying after changes
 
