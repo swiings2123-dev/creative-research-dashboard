@@ -1,89 +1,56 @@
 """
-Best-effort scrape of TikTok Creative Center's public Top Ads page.
+TikTok ad search via the Apify "TikTok Ads Scraper" actor
+(lexis-solutions/tiktok-ads-scraper), instead of scraping TikTok Creative
+Center ourselves - that page returned a hard HTTP 403 from Render's IP
+range (confirmed via diagnostics, survived multiple redeploys/IP changes),
+so self-hosted scraping was a dead end. Apify runs the scrape on their own
+infra, so it isn't affected by that block - and as a bonus, no Chromium
+instance needs to run in our own container for TikTok anymore.
 
-TikTok's domain is unreachable from some networks (including the dev
-machine and Anthropic's own WebFetch infra - both connection-refused/
-timed-out on this URL), but IS reachable from the deployed Render worker.
-When Chromium loads the page there but finds zero videos, this raises a
-descriptive error (page title + body length + button/consent-wall hints)
-instead of silently returning [] - that diagnostic surfaces in the
-worker's JSON response ("errors" field) so the real cause (consent wall,
-region gate, wrong selector, TikTok requires login, etc) is visible
-without needing direct network access to TikTok to debug it.
+Requires APIFY_TOKEN in the environment (from Apify Console -> Settings ->
+API & Integrations -> Personal API token).
 """
 
-from urllib.parse import quote
-from playwright.sync_api import sync_playwright
+import os
+import requests
 
-CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--disable-gpu"]
-
-SEARCH_URL = (
-    "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en"
-    "?period=180&keyword={keyword}"
-)
-
-# Common cookie-consent / region-gate button text seen on TikTok's business
-# pages - clicked if present, ignored if not.
-_DISMISS_TEXTS = ["Accept all", "Accept All", "I Accept", "Got it", "Allow all"]
+RUN_URL = "https://api.apify.com/v2/actors/lexis-solutions~tiktok-ads-scraper/run-sync-get-dataset-items"
 
 
-def search(keyword, timeout_ms=25000):
-    url = SEARCH_URL.format(keyword=quote(keyword))
-    with sync_playwright() as p:
-        browser = p.chromium.launch(args=CHROMIUM_ARGS)
-        page = browser.new_page(locale="en-US", viewport={"width": 1440, "height": 900})
-        response = page.goto(url, timeout=timeout_ms)
-        resp_status = response.status if response else None
-        resp_url = page.url
+def search(keyword, max_pages=1, timeout_s=110):
+    token = os.environ.get("APIFY_TOKEN")
+    if not token:
+        raise RuntimeError("APIFY_TOKEN not set")
 
-        for text in _DISMISS_TEXTS:
-            try:
-                page.get_by_text(text, exact=False).first.click(timeout=1500)
-                break
-            except Exception:
-                pass
+    resp = requests.post(
+        RUN_URL,
+        params={"token": token},
+        json={
+            "query": keyword,
+            "maxPages": max_pages,
+            "country": "all",
+            "quickSearch": True,
+        },
+        timeout=timeout_s,
+    )
+    resp.raise_for_status()
+    items = resp.json()
+    if isinstance(items, dict) and items.get("error"):
+        raise RuntimeError(f"Apify TikTok actor error: {items['error']}")
 
-        try:
-            page.wait_for_selector("video", timeout=15000)
-        except Exception:
-            pass
-        page.wait_for_timeout(2000)
-
-        cards = page.evaluate(
-            """() => Array.from(document.querySelectorAll('video')).map(v => ({
-                src: v.getAttribute('src'),
-                poster: v.getAttribute('poster'),
-            }))"""
-        )
-
-        if not cards:
-            diag = page.evaluate(
-                """() => ({
-                    title: document.title,
-                    bodyLen: document.body.innerText.length,
-                    bodySnippet: document.body.innerText.slice(0, 300),
-                    videoTagCount: document.querySelectorAll('video').length,
-                    iframeCount: document.querySelectorAll('iframe').length,
-                    htmlLen: document.documentElement.outerHTML.length,
-                })"""
-            )
-            diag["httpStatus"] = resp_status
-            diag["finalUrl"] = resp_url
-            browser.close()
-            raise RuntimeError(f"0 videos found - page diagnostic: {diag}")
-
-        browser.close()
-
-    return [
-        {
+    results = []
+    for it in items:
+        video_url = it.get("adVideoUrl")
+        if not video_url:
+            continue  # image-only ad - dashboard is video-only
+        results.append({
             "platform": "tiktok",
-            "advertiser": None,
+            "advertiser": it.get("adTitle") or None,
             "body": None,
-            "video_url": c["src"],
-            "thumbnail": c["poster"],
+            "video_url": video_url,
+            "thumbnail": it.get("adVideoCover") or None,
             "days_running": None,
-            "permalink": url,
-        }
-        for c in cards
-        if c["src"]
-    ]
+            "permalink": None,
+            "library_id": it.get("adId"),
+        })
+    return results
