@@ -2,8 +2,12 @@
 
 ## Status: live
 
-- **Frontend**: https://web-zeta-ecru-61.vercel.app (Vercel, static)
-- **Worker**: https://creative-research-worker.onrender.com (Render, free tier, Docker)
+- **Frontend**: https://creative-research.vercel.app (Vercel, static) - the
+  old web-zeta-ecru-61.vercel.app URL this doc used to list is gone; that
+  preview alias expired/rotated at some point, confirmed by 404 and cross-
+  checked against the live worker's Access-Control-Allow-Origin header
+  during a 2026-08-31 deploy.
+- **Worker**: https://creative-research-worker.onrender.com (Render, Starter plan, Docker)
 - **Source**: https://github.com/swiings2123-dev/creative-research-dashboard
 
 ## Why two hosts
