@@ -23,13 +23,19 @@ EXPOSE 8000
 # health-check ping to "/" gets no response during it. Threads let this
 # one process answer that while a slow POST is in flight, without a
 # second OS process (which would double baseline memory).
-# --max-requests 15 --max-requests-jitter 5: gunicorn recycles this worker
-# process every ~10-20 requests instead of running it forever. Mitigates
-# a real production incident: after dozens of requests in one long-lived
-# process, the whole service crash-looped (even plain GET / started
-# 502ing) - consistent with Chromium subprocesses not fully releasing
-# back to the OS across requests and slowly exhausting the container.
-# Root cause of the leak itself is still not nailed down; this bounds the
-# damage regardless of where it's coming from, at the cost of a ~2-3s
-# pause on whichever request happens to trigger a recycle.
-CMD gunicorn -w 1 --worker-class gthread --threads 4 --max-requests 15 --max-requests-jitter 5 -b 0.0.0.0:$PORT --timeout 300 app:app
+# --max-requests 1000 --max-requests-jitter 200: gunicorn recycles this
+# worker process every ~800-1200 requests instead of running it forever.
+# Mitigates a real production incident: after dozens of requests in one
+# long-lived process, the whole service crash-looped (even plain GET /
+# started 502ing) - consistent with Chromium subprocesses not fully
+# releasing back to the OS across requests and slowly exhausting the
+# container. Raised from the original 15/5 when Product Finder's
+# /finder/status polling landed (finder.py, ~4s interval over a run that
+# can take 20+ minutes = 300-450 polls per job) - that endpoint only reads
+# a SQLite row, no Chromium involved, so it doesn't reintroduce the leak;
+# the old threshold just meant a routine recycle killed the *unrelated*
+# background thread doing the actual scrape mid-job, orphaning it. Root
+# cause of the original leak is still not nailed down; this still bounds
+# the damage from Chromium-heavy requests, just at a volume that survives
+# one finder job's polling instead of getting hit by it within a minute.
+CMD gunicorn -w 1 --worker-class gthread --threads 4 --max-requests 1000 --max-requests-jitter 200 -b 0.0.0.0:$PORT --timeout 300 app:app

@@ -15,3 +15,5 @@ services:
         sync: false
       - key: ALLOWED_ORIGIN
         value: https://web-zeta-ecru-61.vercel.app
+      - key: APIFY_TOKEN
+        sync: false

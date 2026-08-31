@@ -8,9 +8,18 @@ Verified working against a live search during development.
 """
 
 import re
+import threading
 from datetime import datetime, date
 from urllib.parse import quote
 from playwright.sync_api import sync_playwright
+
+# Caps real concurrent Chromium instances at 2 process-wide, regardless of
+# which caller is asking (/search's boost-fill pool and a Product Finder
+# job's sweep pool are independent thread pools that could otherwise stack
+# up to 4 simultaneous instances - confirmed to OOM this container at 3+).
+# ponytail: global semaphore, per-worker-process gate if gunicorn ever runs
+# with more than one worker (-w >1).
+_CHROMIUM_GATE = threading.Semaphore(2)
 
 SEARCH_URL = (
     "https://www.facebook.com/ads/library/?active_status=active&ad_type=all"
@@ -170,11 +179,12 @@ def _dedupe(cards):
 
 def search(keyword, country="US", max_scrolls=12, timeout_ms=30000):
     """Deep single-country search: scrolls until no new ads load."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(args=CHROMIUM_ARGS)
-        page = _new_page(browser)
-        cards = _search_one(page, keyword, country, max_scrolls, timeout_ms)
-        browser.close()
+    with _CHROMIUM_GATE:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=CHROMIUM_ARGS)
+            page = _new_page(browser)
+            cards = _search_one(page, keyword, country, max_scrolls, timeout_ms)
+            browser.close()
     return _dedupe(cards)
 
 
@@ -186,15 +196,16 @@ def search_world(keyword, countries=None, max_scrolls_per_country=6, timeout_ms=
     "search everywhere" instead of building out real parallel workers."""
     countries = countries or WORLD_COUNTRIES
     all_cards = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(args=CHROMIUM_ARGS)
-        page = _new_page(browser)
-        for country in countries:
-            try:
-                all_cards.extend(
-                    _search_one(page, keyword, country, max_scrolls_per_country, timeout_ms)
-                )
-            except Exception:
-                continue
-        browser.close()
+    with _CHROMIUM_GATE:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=CHROMIUM_ARGS)
+            page = _new_page(browser)
+            for country in countries:
+                try:
+                    all_cards.extend(
+                        _search_one(page, keyword, country, max_scrolls_per_country, timeout_ms)
+                    )
+                except Exception:
+                    continue
+            browser.close()
     return _dedupe(all_cards)

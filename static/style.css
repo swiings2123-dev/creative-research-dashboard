@@ -211,6 +211,50 @@ button[type=submit]:active { transform: scale(0.97); }
 }
 .chip:hover { background: var(--bg-soft); transform: translateY(-1px); }
 
+.finder-buttons {
+  margin-top: 1.6rem;
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.finder-btn {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 980px;
+  padding: 0.7rem 1.3rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.finder-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+.finder-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+.evidence-line {
+  font-size: 0.78rem;
+  color: var(--accent);
+  margin-top: 0.5rem;
+  font-weight: 600;
+}
+
+.mark-used-btn {
+  margin-top: 0.6rem;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
+  border-radius: 980px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.mark-used-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.mark-used-btn:disabled { opacity: 0.6; cursor: default; }
+
 .status {
   text-align: center;
   padding: 1.4rem 1.5rem 0;

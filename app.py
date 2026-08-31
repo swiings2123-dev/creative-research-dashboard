@@ -1,9 +1,13 @@
+import json
 import os
+import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from flask import Flask, render_template, request, jsonify, abort
 
 import db
+import finder
 import meta_scrape
 import tiktok_scrape
 import google_lookup
@@ -60,7 +64,10 @@ def _add_cors_headers(resp):
 @app.route("/search", methods=["OPTIONS"])
 @app.route("/lookup-advertiser", methods=["OPTIONS"])
 @app.route("/generate-angles", methods=["OPTIONS"])
-def _cors_preflight():
+@app.route("/finder/start", methods=["OPTIONS"])
+@app.route("/finder/status/<job_id>", methods=["OPTIONS"])
+@app.route("/finder/mark-used", methods=["OPTIONS"])
+def _cors_preflight(job_id=None):
     return "", 204
 
 
@@ -168,7 +175,16 @@ def search():
         else:
             jobs["meta"] = (meta_scrape.search, country, country)
     if "tiktok" in sources:
-        jobs["tiktok"] = (tiktok_scrape.search, country)
+        # Apify's actor wants a real ISO code or "all" - "WORLD" is this
+        # app's own UI-level concept, not something the actor understands.
+        # Passed twice, mirroring the Meta tuple's (fn, country, country)
+        # shape, so _cached_search's own `country` param (used for the
+        # cache key) and the value actually forwarded to `fn` agree - they
+        # used to disagree, silently dropping country from the real call
+        # entirely while still caching per-country (wasted Apify spend on
+        # cache misses that all returned identical underlying data).
+        tiktok_country = "all" if country == "WORLD" else country
+        jobs["tiktok"] = (tiktok_scrape.search, tiktok_country, tiktok_country)
 
     results = []
     errors = {}
@@ -260,6 +276,63 @@ def search():
         "product_match_checked": product_match_checked,
         "notes": notes,
     })
+
+
+@app.route("/finder/start", methods=["POST"])
+def finder_start():
+    _require_secret()
+    data = request.get_json(force=True)
+    mode = (data.get("mode") or "").strip()
+    if mode not in ("india", "international"):
+        return jsonify({"error": "mode must be 'india' or 'international'"}), 400
+
+    running = db.get_running_job()
+    if running:
+        if finder.is_stale(running):
+            db.fail_job(running["job_id"], "no progress for 10+ minutes - the background job likely died (e.g. the server restarted mid-run); start a new run")
+        else:
+            return jsonify({"error": "a finder job is already running", "job_id": running["job_id"], "mode": running["mode"]}), 409
+
+    job_id = uuid.uuid4().hex
+    db.create_job(job_id, mode)
+    target = finder.run_india_finder if mode == "india" else finder.run_international_finder
+    threading.Thread(target=target, args=(job_id,), daemon=True).start()
+    return jsonify({"job_id": job_id, "mode": mode}), 202
+
+
+@app.route("/finder/status/<job_id>", methods=["GET"])
+def finder_status(job_id):
+    _require_secret()
+    row = db.get_job(job_id)
+    if row is None:
+        return jsonify({"error": "job not found"}), 404
+
+    if finder.is_stale(row):
+        db.fail_job(job_id, "no progress for 10+ minutes - the background job likely died (e.g. the server restarted mid-run); start a new run")
+        row = db.get_job(job_id)
+
+    payload = json.loads(row["results_json"]) if row["results_json"] else {}
+    return jsonify({
+        "job_id": row["job_id"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "progress": row["progress"],
+        "results": payload.get("results"),
+        "notes": payload.get("notes") or [],
+        "error": row["error"],
+    })
+
+
+@app.route("/finder/mark-used", methods=["POST"])
+def finder_mark_used():
+    _require_secret()
+    data = request.get_json(force=True)
+    platform = (data.get("platform") or "").strip()
+    external_id = (data.get("external_id") or "").strip()
+    if not platform or not external_id:
+        return jsonify({"error": "platform and external_id required"}), 400
+    db.mark_used(platform, external_id)
+    return jsonify({"ok": True})
 
 
 @app.route("/lookup-advertiser", methods=["POST"])

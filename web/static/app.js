@@ -19,6 +19,11 @@ const countrySelect = document.getElementById("country");
 
 let lastResults = [];
 let lastKeyword = "";
+// null for a plain keyword search, "india"/"international" after a
+// Product Finder run - drives whether renderCard gets a "Mark as used"
+// button (India finder only, per the user's explicit choice: a product
+// keeps reappearing across finder runs until deliberately marked used).
+let currentFinderMode = null;
 
 document.querySelectorAll(".chip").forEach((chip) => {
   chip.addEventListener("click", () => {
@@ -56,8 +61,18 @@ form.addEventListener("submit", async (e) => {
   }
 
   const hasImageSignal = !!(productImageInput.files[0] || productUrl);
+  const isWorld = country === "WORLD";
+  const parts = [];
+  if (isWorld) parts.push("searching across the world");
+  else parts.push("searching");
+  if (hasImageSignal) parts.push("visually verifying the product match");
+  const slow = isWorld || hasImageSignal || SLOW_WORKER;
+  let searchMsg = parts.join(", then ") + (slow ? " - this can take a few minutes..." : "...");
+  if (SLOW_WORKER) searchMsg += " (running on free-tier hosting - even a plain search is slow here, this is expected)";
+
   lastKeyword = keyword;
-  showSkeletons(country === "WORLD", hasImageSignal);
+  currentFinderMode = null;
+  showSkeletons(searchMsg);
   hideGenerateButton();
 
   const formData = new FormData();
@@ -162,22 +177,19 @@ function renderPlatformFilter(results) {
   });
 }
 
-function renderResults(results) {
-  resultsEl.innerHTML = "";
-  results.forEach((ad, i) => resultsEl.appendChild(renderCard(ad, i)));
+function cardOptsFor() {
+  return currentFinderMode === "india" ? { onMarkUsed: markUsedHandler } : {};
 }
 
-function showSkeletons(isWorld, hasImageSignal) {
+function renderResults(results) {
+  resultsEl.innerHTML = "";
+  results.forEach((ad, i) => resultsEl.appendChild(renderCard(ad, i, cardOptsFor())));
+}
+
+function showSkeletons(message) {
   statusEl.classList.add("loading");
   platformFilterEl.classList.add("hidden");
-  const parts = [];
-  if (isWorld) parts.push("searching across the world");
-  else parts.push("searching");
-  if (hasImageSignal) parts.push("visually verifying the product match");
-  const slow = isWorld || hasImageSignal || SLOW_WORKER;
-  let msg = parts.join(", then ") + (slow ? " - this can take a few minutes..." : "...");
-  if (SLOW_WORKER) msg += " (running on free-tier hosting - even a plain search is slow here, this is expected)";
-  statusEl.textContent = msg;
+  statusEl.textContent = message;
   resultsEl.innerHTML = "";
   for (let i = 0; i < 10; i++) {
     const s = document.createElement("div");
@@ -195,7 +207,7 @@ function statusPill(daysRunning) {
   return `<span class="pill ${cls}">${label}</span>`;
 }
 
-function renderCard(ad, index) {
+function renderCard(ad, index, opts = {}) {
   const card = document.createElement("div");
   card.className = "card";
   card.style.animationDelay = `${Math.min(index * 30, 400)}ms`;
@@ -214,11 +226,13 @@ function renderCard(ad, index) {
   const body = document.createElement("div");
   body.className = "card-body";
   const variantsPill = ad.variant_count > 1 ? `<span class="pill variants">×${ad.variant_count} variants</span>` : "";
+  const evidenceLine = ad.evidence ? `<div class="evidence-line">${escapeHtml(ad.evidence)}</div>` : "";
   body.innerHTML = `
     <div class="platform platform-${ad.platform}">${(PLATFORM_LABELS[ad.platform] || ad.platform)}${ad.country && ad.country !== "US" ? " · " + ad.country : ""}</div>
     <div class="advertiser">${escapeHtml(ad.advertiser || "Unknown")}</div>
     <div class="pill-row">${statusPill(ad.days_running)}${variantsPill}</div>
     <div class="body-text">${escapeHtml(ad.body || "")}</div>
+    ${evidenceLine}
   `;
   card.appendChild(body);
 
@@ -232,6 +246,20 @@ function renderCard(ad, index) {
     body.addEventListener("click", () => window.open(ad.permalink, "_blank"));
   }
 
+  if (opts.onMarkUsed) {
+    const markBtn = document.createElement("button");
+    markBtn.type = "button";
+    markBtn.className = "mark-used-btn";
+    markBtn.textContent = "✅ Mark as used";
+    markBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      markBtn.disabled = true;
+      markBtn.textContent = "Marking...";
+      opts.onMarkUsed(ad, card);
+    });
+    card.appendChild(markBtn);
+  }
+
   return card;
 }
 
@@ -240,6 +268,171 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+// --- Product Finder (India / International) ---
+// Zero-keyword discovery: the backend runs a deep multi-minute Meta+TikTok
+// sweep on a background thread (see finder.py) and returns a job_id right
+// away - this polls for progress/results instead of one long request,
+// since a deep run can take 20+ minutes, far past what a single HTTP
+// request should stay open for.
+const FINDER_MESSAGES = {
+  india: "🇮🇳 Scanning TikTok Top Ads + 40 niches across India — this can take up to ~10 minutes...",
+  international: "🌍 Screening 40 niches across 8 international markets, then checking India presence — this can take ~20-25 minutes...",
+};
+const finderIndiaBtn = document.getElementById("finder-india-btn");
+const finderIntlBtn = document.getElementById("finder-intl-btn");
+let finderPollTimer = null;
+// A deep run takes 7-25 minutes - a reload during that window must not
+// strand the user watching nothing, since the job keeps running server-
+// side regardless. Best-effort only (a private window or cleared site
+// data just means no auto-resume - the job itself is unaffected either
+// way, it's not the source of truth).
+const FINDER_JOB_STORAGE_KEY = "activeFinderJob";
+
+function saveActiveFinderJob(jobId, mode) {
+  try { localStorage.setItem(FINDER_JOB_STORAGE_KEY, JSON.stringify({ jobId, mode })); } catch (err) {}
+}
+function clearActiveFinderJob() {
+  try { localStorage.removeItem(FINDER_JOB_STORAGE_KEY); } catch (err) {}
+}
+function loadActiveFinderJob() {
+  try {
+    const raw = localStorage.getItem(FINDER_JOB_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function setFinderButtonsDisabled(disabled) {
+  finderIndiaBtn.disabled = disabled;
+  finderIntlBtn.disabled = disabled;
+}
+
+async function startFinder(mode) {
+  if (finderPollTimer) return; // a finder job is already being polled
+  setFinderButtonsDisabled(true);
+  currentFinderMode = mode;
+  showSkeletons(FINDER_MESSAGES[mode]);
+  hideGenerateButton();
+
+  let res, data;
+  try {
+    res = await fetch(API_BASE + "/finder/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ mode }),
+    });
+    data = await res.json();
+  } catch (err) {
+    statusEl.classList.remove("loading");
+    statusEl.textContent = "Could not reach the server. Try again in a minute.";
+    setFinderButtonsDisabled(false);
+    return;
+  }
+
+  if (res.status === 409 && data.job_id) {
+    // A job is already running (e.g. from before a page reload) - resume
+    // watching that one instead of just reporting "already running" and
+    // leaving the user with no way to see it finish.
+    currentFinderMode = data.mode;
+    showSkeletons(FINDER_MESSAGES[data.mode] || "resuming an in-progress finder run...");
+    pollFinderJob(data.job_id, data.mode);
+    return;
+  }
+
+  if (!res.ok) {
+    statusEl.classList.remove("loading");
+    statusEl.textContent = "Error: " + (data.error || "could not start the finder");
+    setFinderButtonsDisabled(false);
+    return;
+  }
+
+  saveActiveFinderJob(data.job_id, mode);
+  pollFinderJob(data.job_id, mode);
+}
+
+function pollFinderJob(jobId, mode) {
+  setFinderButtonsDisabled(true);
+  finderPollTimer = setInterval(async () => {
+    let res, data;
+    try {
+      res = await fetch(API_BASE + `/finder/status/${jobId}`, { headers: authHeaders });
+      data = await res.json();
+    } catch (err) {
+      return; // transient network hiccup - just try again next tick
+    }
+
+    if (!res.ok) {
+      clearInterval(finderPollTimer);
+      finderPollTimer = null;
+      clearActiveFinderJob();
+      setFinderButtonsDisabled(false);
+      statusEl.classList.remove("loading");
+      statusEl.textContent = "Error: " + (data.error || "finder job not found");
+      return;
+    }
+
+    if (data.status === "running") {
+      statusEl.textContent = data.progress || "working...";
+      return;
+    }
+
+    clearInterval(finderPollTimer);
+    finderPollTimer = null;
+    clearActiveFinderJob();
+    setFinderButtonsDisabled(false);
+    statusEl.classList.remove("loading");
+
+    if (data.status === "error") {
+      statusEl.textContent = "Finder failed: " + (data.error || "unknown error");
+      resultsEl.innerHTML = "";
+      platformFilterEl.classList.add("hidden");
+      return;
+    }
+
+    const results = data.results || [];
+    const notes = data.notes || [];
+    let statusText = `${results.length} product(s) found.`;
+    if (notes.length) statusText += " Issues - " + notes.join(" | ");
+    statusEl.textContent = statusText;
+    lastResults = results;
+    lastKeyword = mode === "india" ? "trending in India" : "international opportunity";
+    renderPlatformFilter(results);
+    renderResults(results);
+    if (results.length > 0) showGenerateButton();
+  }, 4000);
+}
+
+async function markUsedHandler(ad, card) {
+  try {
+    await fetch(API_BASE + "/finder/mark-used", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ platform: ad.platform, external_id: ad.library_id }),
+    });
+  } catch (err) {
+    // best-effort - the card still comes out of view either way, and
+    // a failed mark just means it can reappear on the next finder run.
+  }
+  card.remove();
+}
+
+finderIndiaBtn.addEventListener("click", () => startFinder("india"));
+finderIntlBtn.addEventListener("click", () => startFinder("international"));
+
+// Resume watching a finder job that was still running when the page was
+// last reloaded/closed - the job itself runs server-side regardless, this
+// just reconnects the UI to it instead of leaving the user with no way to
+// see it finish short of guessing and hitting the 409-resume path above.
+(function resumeActiveFinderJob() {
+  const saved = loadActiveFinderJob();
+  if (!saved) return;
+  currentFinderMode = saved.mode;
+  showSkeletons(FINDER_MESSAGES[saved.mode] || "resuming an in-progress finder run...");
+  hideGenerateButton();
+  pollFinderJob(saved.jobId, saved.mode);
+})();
 
 document.getElementById("lookup-form").addEventListener("submit", async (e) => {
   e.preventDefault();
