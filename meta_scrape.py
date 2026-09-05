@@ -122,7 +122,18 @@ def _parse_card(card, country):
     }
 
 
-def _scroll_until_plateau(page, max_scrolls, plateau_rounds=3, wait_ms=1500):
+# wait_ms/plateau_rounds were tuned tight (1500ms, 3 rounds) against a
+# warm container - confirmed live (2026-09-05) this can badly undercount
+# on a cold one: right after a fresh Render deploy, a real search for
+# "kids learning phone" in India returned only 8 cards through the app,
+# but the identical query re-run moments later (same code, warm process)
+# found 68 - the page was still rendering new cards when the plateau
+# check fired, so scrolling gave up early. Same-day result caching then
+# kept that thin 8-card result stuck for the rest of the day. Loosened
+# both knobs so a slow/cold page load gets more chances to prove it's
+# still growing before scrolling concludes it's done - costs a bit more
+# wall-clock time per search, worth it over silently undercounting.
+def _scroll_until_plateau(page, max_scrolls, plateau_rounds=4, wait_ms=2200):
     prev_count = 0
     stale = 0
     for _ in range(max_scrolls):
