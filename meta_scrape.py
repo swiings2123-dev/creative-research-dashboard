@@ -188,8 +188,18 @@ def _dedupe(cards):
     return out
 
 
-def search(keyword, country="US", max_scrolls=12, timeout_ms=30000):
-    """Deep single-country search: scrolls until no new ads load."""
+def search(keyword, country="US", max_scrolls=20, timeout_ms=30000):
+    """Deep single-country search: scrolls until no new ads load.
+
+    max_scrolls raised from 12 - confirmed live (2026-09-05) that Render's
+    container renders pages slower than a local dev machine (the same
+    tuned wait_ms/plateau_rounds still isn't enough dwell time per scroll
+    there), so the loop was hitting its scroll-count ceiling before really
+    plateauing: the exact same fresh (non-cached) query returned 116 cards
+    locally but a consistent, identical 65 twice in a row on Render - not
+    the run-to-run variance you'd expect from actually reaching a natural
+    plateau, but the signature of a hard ceiling being hit every time.
+    """
     with _CHROMIUM_GATE:
         with sync_playwright() as p:
             browser = p.chromium.launch(args=CHROMIUM_ARGS)
