@@ -1,26 +1,36 @@
 """
-Scrapes the public Meta Ad Library website (facebook.com/ads/library).
+Meta (Facebook + Instagram) ad search via the Apify "Facebook Ads Library
+Scraper" actor (apify/facebook-ads-scraper), instead of scraping the
+public Ad Library ourselves with Playwright.
 
-Not the official Graph API - that endpoint only returns political/issue/
-special-category ads, not ordinary commercial ads (confirmed by testing).
-The public website has the real commercial ad data, free, no login.
-Verified working against a live search during development.
+Confirmed live (2026-09-05) that self-hosted scraping from Render's IP
+range gets a filtered/reduced result set from Meta - two independent
+back-to-back fresh scrapes of the identical query returned a consistent,
+lower count on Render than the same query run locally, and specific
+known-active advertisers (confirmed present via a direct check) were
+completely absent from the Render-run results every time. This mirrors
+exactly what already happened to tiktok_scrape.py (Render's IP hard-
+blocked by TikTok) - Apify's actor runs on their own infra instead, which
+does not hit this problem (confirmed: the same missing advertiser's ads
+were found correctly via the actor). No more in-container Chromium for
+Meta, so no more Chromium-concurrency/OOM concern here either.
+
+Requires APIFY_TOKEN in the environment (from Apify Console -> Settings ->
+API & Integrations -> Personal API token) - same token TikTok already
+uses, since both are Apify actors.
 """
 
-import re
-import threading
-from datetime import datetime, date
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from urllib.parse import quote
-from playwright.sync_api import sync_playwright
+import requests
 
-# Caps real concurrent Chromium instances at 2 process-wide, regardless of
-# which caller is asking (/search's boost-fill pool and a Product Finder
-# job's sweep pool are independent thread pools that could otherwise stack
-# up to 4 simultaneous instances - confirmed to OOM this container at 3+).
-# ponytail: global semaphore, per-worker-process gate if gunicorn ever runs
-# with more than one worker (-w >1).
-_CHROMIUM_GATE = threading.Semaphore(2)
+RUN_URL = "https://api.apify.com/v2/actors/apify~facebook-ads-scraper/run-sync-get-dataset-items"
 
+# The exact URL the old Playwright scraper used to navigate to directly -
+# unchanged, just handed to the actor as a startUrls entry now instead of
+# being loaded in our own browser.
 SEARCH_URL = (
     "https://www.facebook.com/ads/library/?active_status=active&ad_type=all"
     "&country={country}&is_targeted_country=false&media_type=video"
@@ -37,196 +47,137 @@ WORLD_COUNTRIES = [
     "US", "GB", "AE", "CN", "IN", "AU", "CA", "SA", "DE", "PH", "ID", "BR", "MX",
 ]
 
-# Standard headless-in-Docker flags: don't touch network/page behavior (so
-# they can't cause the "blocked media hides the card" bug the resource-
-# blocking attempt hit), only Chromium's own internal resource use. Real
-# lever for the production OOM/mid-request-restart crash: --disable-dev-
-# shm-usage avoids the tiny default /dev/shm size Docker containers get
-# (a very common headless-Chromium-in-Docker crash cause), --disable-gpu
-# skips GPU process overhead that's dead weight with no GPU in the
-# container anyway.
-CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--disable-gpu"]
-
-# ponytail: DOM walk finds the ad-card boundary by watching innerText length
-# jump sharply once we cross from a single card into the results grid.
-# Facebook's class names are hashed/unstable, this text-based heuristic is
-# the durable part. If Facebook changes the "Library ID" / "Started running
-# on" wording, update the regexes in _parse_card below.
-CARD_EXTRACT_JS = """
-() => {
-    const videos = Array.from(document.querySelectorAll('video'));
-    const results = [];
-    for (const v of videos) {
-        let node = v;
-        let prevLen = 0;
-        let chosen = null;
-        for (let i = 0; i < 20 && node; i++) {
-            const len = (node.innerText || '').length;
-            if (len > 0 && node.innerText.includes('Library ID')) {
-                if (prevLen > 0 && len > prevLen * 4 && chosen) break;
-                chosen = node;
-                prevLen = len;
-            }
-            node = node.parentElement;
-        }
-        if (chosen) {
-            results.push({
-                text: chosen.innerText,
-                src: v.getAttribute('src'),
-                poster: v.getAttribute('poster'),
-            });
-        }
-    }
-    return results;
-}
-"""
+WORLD_CONCURRENCY = 6  # plain HTTP calls to Apify, not Chromium - safe well above
+                       # the old 2-instance Playwright cap
 
 
-def _parse_days_running(text):
-    m = re.search(r"Started running on (\d{1,2} \w+ \d{4})", text)
-    if not m:
+def _token():
+    token = os.environ.get("APIFY_TOKEN")
+    if not token:
+        raise RuntimeError("APIFY_TOKEN not set")
+    return token
+
+
+def _post(payload, timeout_s):
+    resp = requests.post(
+        RUN_URL,
+        headers={"Authorization": f"Bearer {_token()}"},
+        json=payload,
+        timeout=timeout_s,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Apify request failed ({resp.status_code}): {resp.text[:500]}")
+    items = resp.json()
+    if isinstance(items, dict) and items.get("error"):
+        raise RuntimeError(f"Apify actor error: {items['error']}")
+    return items
+
+
+def _days_running(start_date_formatted):
+    if not start_date_formatted:
         return None, None
     try:
-        started = datetime.strptime(m.group(1), "%d %b %Y").date()
-        return m.group(1), (date.today() - started).days
+        started = datetime.fromisoformat(start_date_formatted.replace("Z", "+00:00"))
+        days = (datetime.now(timezone.utc) - started).days
+        return started.date().isoformat(), days
     except ValueError:
-        return m.group(1), None
+        return None, None
 
 
-def _parse_card(card, country):
-    text = card["text"]
-    lib_id = re.search(r"Library ID: (\d+)", text)
-    started_str, days_running = _parse_days_running(text)
-    advertiser_match = re.search(r"\n([^\n]+)\nSponsored\n", text)
-    advertiser = advertiser_match.group(1) if advertiser_match else "Unknown"
-    body_match = re.search(r"Sponsored\n(.+?)\n0:00", text, re.S)
-    body = body_match.group(1).strip() if body_match else ""
-    # "N ads use this creative and text" - a scale signal: the more variants
-    # running with the same creative, the harder this angle is being pushed.
-    variant_match = re.search(r"(\d+) ads? use this creative and text", text)
-    variant_count = int(variant_match.group(1)) if variant_match else 1
+def _first_video(snapshot):
+    """Video content lives in one of two places depending on ad format -
+    confirmed live: 56/60 sampled ads used snapshot.videos[], 4/60 used
+    snapshot.cards[] (carousel-style, each card can carry its own video) -
+    same field names (videoHdUrl/videoSdUrl/videoPreviewImageUrl) either
+    way, just nested one level differently."""
+    for source in (snapshot.get("videos") or []), (snapshot.get("cards") or []):
+        for item in source:
+            video_url = item.get("videoHdUrl") or item.get("videoSdUrl")
+            if video_url:
+                return video_url, item.get("videoPreviewImageUrl")
+    return None, None
+
+
+def _body_text(snapshot):
+    body = snapshot.get("body")
+    if isinstance(body, dict):
+        text = body.get("text")
+        if text:
+            return text
+    elif isinstance(body, str) and body:
+        return body
+    # Carousel ads can carry the real copy per-card instead of at the top
+    # level - confirmed live, one sampled ad had snapshot.body=None but
+    # snapshot.cards[0].body populated.
+    for card in snapshot.get("cards") or []:
+        if card.get("body"):
+            return card["body"]
+    return ""
+
+
+def _parse_item(item, country):
+    snapshot = item.get("snapshot") or {}
+    video_url, thumbnail = _first_video(snapshot)
+    if not video_url:
+        return None  # image-only ad - dashboard is video-only, matches prior behavior
+    library_id = str(item.get("adArchiveID") or item.get("adArchiveId") or "") or None
+    started_on, days_running = _days_running(item.get("startDateFormatted"))
     return {
         "platform": "meta",
-        "advertiser": advertiser,
-        "body": body,
-        "video_url": card["src"],
-        "thumbnail": card["poster"],
-        "library_id": lib_id.group(1) if lib_id else None,
-        "started_on": started_str,
+        "advertiser": snapshot.get("pageName") or "Unknown",
+        "body": _body_text(snapshot),
+        "video_url": video_url,
+        "thumbnail": thumbnail,
+        "library_id": library_id,
+        "started_on": started_on,
         "days_running": days_running,
-        "variant_count": variant_count,
+        # "N ads use this creative and text" in the old UI - same concept,
+        # this actor exposes it directly as an integer.
+        "variant_count": item.get("collationCount") or 1,
         "country": country,
-        "permalink": (
-            f"https://www.facebook.com/ads/library/?id={lib_id.group(1)}" if lib_id else None
-        ),
+        "permalink": f"https://www.facebook.com/ads/library/?id={library_id}" if library_id else None,
     }
 
 
-# wait_ms/plateau_rounds were tuned tight (1500ms, 3 rounds) against a
-# warm container - confirmed live (2026-09-05) this can badly undercount
-# on a cold one: right after a fresh Render deploy, a real search for
-# "kids learning phone" in India returned only 8 cards through the app,
-# but the identical query re-run moments later (same code, warm process)
-# found 68 - the page was still rendering new cards when the plateau
-# check fired, so scrolling gave up early. Same-day result caching then
-# kept that thin 8-card result stuck for the rest of the day. Loosened
-# both knobs so a slow/cold page load gets more chances to prove it's
-# still growing before scrolling concludes it's done - costs a bit more
-# wall-clock time per search, worth it over silently undercounting.
-def _scroll_until_plateau(page, max_scrolls, plateau_rounds=4, wait_ms=2200):
-    prev_count = 0
-    stale = 0
-    for _ in range(max_scrolls):
-        page.mouse.wheel(0, 4000)
-        page.wait_for_timeout(wait_ms)
-        count = page.evaluate("document.querySelectorAll('video').length")
-        if count <= prev_count:
-            stale += 1
-            if stale >= plateau_rounds:
-                break
-        else:
-            stale = 0
-        prev_count = count
-    return prev_count
-
-
-# Tried blocking video/image network requests to cut Chromium's memory
-# footprint (we only read the src/poster URL *attributes*, never the actual
-# bytes) - reverted: confirmed the page's own JS hides/unmounts an ad card
-# when its video fails to load (an error-handling UX pattern), so blocking
-# "media" alone dropped a reliable 80-94 result search to 0. Real bug, not
-# a maybe - reproduced twice. Do not re-add without re-verifying against a
-# live search that results still come back non-empty.
-def _new_page(browser):
-    return browser.new_page(locale="en-US")
-
-
-def _search_one(page, keyword, country, max_scrolls, timeout_ms):
-    url = SEARCH_URL.format(country=country, keyword=quote(keyword))
-    page.goto(url, timeout=timeout_ms)
-    # Wait for an actual video to render rather than a fixed delay - a fixed
-    # 4s was fine on a fast dev machine but came back empty on a slower free
-    # -tier CPU (confirmed: same page needed ~12s there). If truly zero
-    # video ads exist for this query, this just falls through after the
-    # timeout with nothing to find.
-    try:
-        page.wait_for_selector("video", timeout=15000)
-    except Exception:
-        pass
-    _scroll_until_plateau(page, max_scrolls)
-    cards = page.evaluate(CARD_EXTRACT_JS)
-    return [_parse_card(c, country) for c in cards]
-
-
-def _dedupe(cards):
+def _dedupe(ads):
     seen = set()
     out = []
-    for c in cards:
-        if c["library_id"] and c["library_id"] not in seen:
-            seen.add(c["library_id"])
-            out.append(c)
+    for a in ads:
+        if a["library_id"] and a["library_id"] not in seen:
+            seen.add(a["library_id"])
+            out.append(a)
     return out
 
 
-def search(keyword, country="US", max_scrolls=20, timeout_ms=30000):
-    """Deep single-country search: scrolls until no new ads load.
-
-    max_scrolls raised from 12 - confirmed live (2026-09-05) that Render's
-    container renders pages slower than a local dev machine (the same
-    tuned wait_ms/plateau_rounds still isn't enough dwell time per scroll
-    there), so the loop was hitting its scroll-count ceiling before really
-    plateauing: the exact same fresh (non-cached) query returned 116 cards
-    locally but a consistent, identical 65 twice in a row on Render - not
-    the run-to-run variance you'd expect from actually reaching a natural
-    plateau, but the signature of a hard ceiling being hit every time.
-    """
-    with _CHROMIUM_GATE:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(args=CHROMIUM_ARGS)
-            page = _new_page(browser)
-            cards = _search_one(page, keyword, country, max_scrolls, timeout_ms)
-            browser.close()
-    return _dedupe(cards)
+def search(keyword, country="US", results_limit=100, timeout_s=280):
+    """Single-country search via the Apify actor - resultsLimit controls
+    depth directly (no scroll/plateau heuristics needed, the actor handles
+    its own pagination), so raising it is just a straightforward cost/
+    depth tradeoff instead of a timing-sensitive guess."""
+    url = SEARCH_URL.format(country=country, keyword=quote(keyword))
+    items = _post({
+        "startUrls": [{"url": url}],
+        "resultsLimit": results_limit,
+        "activeStatus": "active",
+    }, timeout_s)
+    ads = [_parse_item(it, country) for it in items]
+    return _dedupe([a for a in ads if a])
 
 
-def search_world(keyword, countries=None, max_scrolls_per_country=6, timeout_ms=30000):
-    """Loops the same keyword across major dropshipping markets, one shared
-    browser instance (re-launching Chromium per country is the expensive
-    part, not navigation). Runs sequentially - a full world pass over ~13
-    countries takes a couple of minutes; that's the accepted tradeoff for
-    "search everywhere" instead of building out real parallel workers."""
+def search_world(keyword, countries=None, results_limit_per_country=40, timeout_s=280):
+    """Runs one actor call per market concurrently - plain HTTP requests,
+    not Chromium instances, so there's no OOM ceiling to respect here the
+    way meta_scrape.py's old Playwright version had."""
     countries = countries or WORLD_COUNTRIES
-    all_cards = []
-    with _CHROMIUM_GATE:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(args=CHROMIUM_ARGS)
-            page = _new_page(browser)
-            for country in countries:
-                try:
-                    all_cards.extend(
-                        _search_one(page, keyword, country, max_scrolls_per_country, timeout_ms)
-                    )
-                except Exception:
-                    continue
-            browser.close()
-    return _dedupe(all_cards)
+    all_ads = []
+    with ThreadPoolExecutor(max_workers=min(WORLD_CONCURRENCY, len(countries))) as ex:
+        futures = {
+            ex.submit(search, keyword, c, results_limit_per_country, timeout_s): c
+            for c in countries
+        }
+        for fut in as_completed(futures):
+            try:
+                all_ads.extend(fut.result())
+            except Exception:
+                continue
+    return _dedupe(all_ads)

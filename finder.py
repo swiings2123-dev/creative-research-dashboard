@@ -103,18 +103,31 @@ INTL_MARKETS = ["US", "GB", "CA", "AU", "DE", "FR", "BR", "SA"]
 # also confirmed-valid TOP_ADS_COUNTRIES values, disjoint from INTL_MARKETS.
 BACKUP_INTL_MARKETS = ["PH", "ID", "MX", "AE", "NL", "JP", "TH", "KR"]
 
-FINDER_CONCURRENCY = 2          # Meta/Playwright cap, matches app.py's BOOST_CONCURRENCY
+# Meta and TikTok are both plain Apify HTTP calls now, not local Chromium
+# instances - no more OOM ceiling to respect, so this can run well above
+# the old 2-instance Playwright-era cap.
+FINDER_CONCURRENCY = 6
 TIKTOK_QUERY_CONCURRENCY = 4    # Apify HTTP calls - io-bound, no Chromium involved
 
 MIN_RESULTS = 20                 # hard floor for both finders - no ceiling otherwise
 INTL_MIN_ADS = 15               # Phase-1 screen: permissive on purpose - a false
-                                 # positive costs one extra ~18s India-check call, a
+                                 # positive costs one extra India-check call, a
                                  # false negative kills a real opportunity forever.
 INDIA_MAX_ADS = 3               # "essentially untested in India" - not strictly 0,
                                  # a couple of copycat sellers doesn't mean saturated.
 TIKTOK_TOP_ADS_PER_MARKET = 15  # per market, how many Top Ads to pull
 INTL_ADS_PER_KEYWORD = 3        # how many actual ad creatives to surface per
                                  # qualifying international Meta keyword
+
+# Meta search is now a paid Apify actor call, not a free Playwright
+# scrape - these keep each finder's Meta cost bounded and deliberately
+# match each phase's actual precision need rather than always asking for
+# max depth: the India sweep is the real discovery source so it gets a
+# generous limit, while phase 1/2 only need enough depth to clear/reject
+# a threshold (15 and 3 respectively), not to enumerate every ad.
+INDIA_SWEEP_RESULTS_LIMIT = 50
+PHASE1_RESULTS_LIMIT = 15
+PHASE2_RESULTS_LIMIT = 15
 
 STALE_JOB_TIMEOUT_S = 600       # no progress update in 10 min -> treat as dead
                                  # (the background thread died with a worker recycle)
@@ -140,7 +153,7 @@ def _dedupe_by_library_id(ads):
 def _india_meta_sweep(job_id, keywords, notes, label="Meta"):
     ads = []
     with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
-        futures = {ex.submit(meta_scrape.search, kw, "IN"): kw for kw in keywords}
+        futures = {ex.submit(meta_scrape.search, kw, "IN", INDIA_SWEEP_RESULTS_LIMIT): kw for kw in keywords}
         done = 0
         for fut in as_completed(futures):
             done += 1
@@ -186,7 +199,7 @@ def _intl_meta_phase1(job_id, notes, keywords, label="Meta"):
     qualifying = []  # list of (keyword, intl_ads)
     with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
         futures = {
-            ex.submit(meta_scrape.search_world, kw, INTL_MARKETS, 4): kw
+            ex.submit(meta_scrape.search_world, kw, INTL_MARKETS, PHASE1_RESULTS_LIMIT): kw
             for kw in keywords
         }
         done = 0
@@ -211,7 +224,7 @@ def _intl_meta_phase2(job_id, qualifying, notes, label="Meta"):
     candidates = []
     with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
         futures = {
-            ex.submit(meta_scrape.search, kw, "IN"): (kw, intl_ads)
+            ex.submit(meta_scrape.search, kw, "IN", PHASE2_RESULTS_LIMIT): (kw, intl_ads)
             for kw, intl_ads in qualifying
         }
         done = 0

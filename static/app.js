@@ -32,6 +32,18 @@ document.querySelectorAll(".chip").forEach((chip) => {
   });
 });
 
+// TikTok ads don't run in India at all - TikTok is banned there, so no
+// advertiser can target Indian users (confirmed against the actual TikTok
+// Apify actors' allowed-country lists - India isn't in either one). Shown
+// whenever India is selected, regardless of the TikTok checkbox state, so
+// it's informative before someone even decides to check that box.
+const tiktokIndiaNotice = document.getElementById("tiktok-india-notice");
+function updateTiktokIndiaNotice() {
+  tiktokIndiaNotice.classList.toggle("hidden", countrySelect.value !== "IN");
+}
+countrySelect.addEventListener("change", updateTiktokIndiaNotice);
+updateTiktokIndiaNotice();
+
 const productImageInput = document.getElementById("product-image");
 const productImageLabel = document.getElementById("product-image-label");
 productImageInput.addEventListener("change", () => {

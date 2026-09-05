@@ -40,18 +40,6 @@ db.init_db()
 # unaffected.
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
-# "At least 50 creatives" target: if a single-country Meta search comes up
-# short, we top up from these markets before giving up (see /search).
-# 5 candidate markets, but never run more than 2 Chromium instances at
-# once (BOOST_CONCURRENCY below) - confirmed by repeated reproduction that
-# 3 simultaneous browsers OOMs this host, 2 never did. More candidates
-# still means more total coverage/redundancy, just fetched 2-at-a-time
-# instead of all-at-once - each is merged in and deduped by library_id as
-# it completes, and the whole pass stops early once the target is met.
-MIN_TARGET_RESULTS = 50
-BOOST_COUNTRIES = ["GB", "CA", "AU", "AE", "DE"]
-BOOST_CONCURRENCY = 2
-
 
 @app.after_request
 def _add_cors_headers(resp):
@@ -164,10 +152,10 @@ def search():
             "notes": notes,
         }), 400
 
-    # Meta and TikTok are independent scrapes (separate Chromium instances) -
-    # running them in parallel threads instead of one-after-another roughly
-    # halves wall time when both sources are selected, at no extra cost
-    # (same CPU work, just overlapped instead of serialized).
+    # Meta and TikTok are both independent Apify actor calls now (plain
+    # HTTP, no local Chromium for either) - running them in parallel
+    # threads instead of one-after-another roughly halves wall time when
+    # both sources are selected, at no extra cost.
     jobs = {}
     if "meta" in sources:
         if country == "WORLD":
@@ -199,63 +187,6 @@ def search():
             results.extend(r)
             if err:
                 errors[source] = err
-
-    # If a single-country Meta search came up short of the target, silently
-    # top up from a few more major markets instead of making the user
-    # switch to World mode - only pays the extra latency for keywords that
-    # are genuinely thin in one country; most searches never hit this.
-    # Cache-hit boost countries are folded in for free; only the actual
-    # cache-misses launch a browser, and those run in parallel instead of
-    # one-after-another (was the biggest remaining latency source - up to
-    # 3 sequential ~15-20s scrapes, now overlapped).
-    if "meta" in sources and country != "WORLD":
-        meta_count = sum(1 for r in results if r.get("platform") == "meta")
-        if meta_count < MIN_TARGET_RESULTS:
-            existing_ids = {r["library_id"] for r in results if r.get("library_id")}
-            need_scrape = []
-            for boost_country in BOOST_COUNTRIES:
-                if boost_country == country:
-                    continue
-                cached = db.get_cached("meta", resolved_keyword, boost_country)
-                if cached is not None:
-                    new = [x for x in cached if x.get("library_id") not in existing_ids]
-                    results.extend(new)
-                    existing_ids.update(x["library_id"] for x in new if x.get("library_id"))
-                    meta_count += len(new)
-                elif meta_count < MIN_TARGET_RESULTS:
-                    need_scrape.append(boost_country)
-
-            if meta_count < MIN_TARGET_RESULTS and need_scrape:
-                # Capped at BOOST_CONCURRENCY (2), not len(need_scrape) (up
-                # to 5): confirmed root cause of a real production crash -
-                # 3 simultaneous Chromium instances exceeded this
-                # container's memory (reproduced repeatedly: a keyword
-                # needing all 3 boost countries at once crashed every time,
-                # one needing only 2 never did). 2 preserves most of the
-                # speedup while keeping peak memory to what's actually
-                # held up in testing. With 5 candidates now instead of 3,
-                # early-cancel once the target's met so we don't burn time
-                # scraping countries whose results we'll never need - a
-                # not-yet-started future cancels cleanly; one already
-                # running just finishes naturally, its results still get
-                # folded in for free.
-                with ThreadPoolExecutor(max_workers=min(BOOST_CONCURRENCY, len(need_scrape))) as ex:
-                    boost_futures = {
-                        ex.submit(_cached_search, "meta", meta_scrape.search, resolved_keyword, bc, bc): bc
-                        for bc in need_scrape
-                    }
-                    for fut in as_completed(boost_futures):
-                        r, err = fut.result()
-                        new = [x for x in r if x.get("library_id") not in existing_ids]
-                        results.extend(new)
-                        existing_ids.update(x["library_id"] for x in new if x.get("library_id"))
-                        meta_count += len(new)
-                        if err:
-                            errors[f"meta_boost_{boost_futures[fut]}"] = err
-                        if meta_count >= MIN_TARGET_RESULTS:
-                            for pending in boost_futures:
-                                pending.cancel()
-                            break
 
     results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 
