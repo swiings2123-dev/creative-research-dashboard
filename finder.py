@@ -15,6 +15,14 @@ search in app.py's /search route.
   already (same reason as above), so no separate India check is needed
   for TikTok candidates.
 
+Both guarantee at least MIN_RESULTS items (no ceiling otherwise) by
+backfilling from a second keyword/market pool when the primary pass comes
+up short - the same "boost-fill" idea app.py's /search already uses for
+Meta (MIN_TARGET_RESULTS/BOOST_COUNTRIES), applied here to niches/markets
+instead of countries. This matters most for the India finder once you've
+been marking products used for a while - the unused pool naturally
+shrinks, so a fixed 40-keyword sweep alone can eventually fall short.
+
 Both run as background threads (see app.py's /finder/start) since a deep
 run takes minutes, not seconds - see db.py's finder_jobs table for how
 progress/results get back to the polling frontend.
@@ -65,6 +73,23 @@ SEED_KEYWORDS = [
     "jewelry organizer box",
 ]
 
+# Second-tier niche pool, only swept when the primary SEED_KEYWORDS pass
+# doesn't clear MIN_RESULTS (see _backfill_keywords below) - kept as a
+# disjoint list rather than just "more of the same" so a floor-topping
+# pass actually surfaces different products, not near-duplicates of what
+# the primary pass already found.
+BACKUP_SEED_KEYWORDS = [
+    "electric spin scrubber", "cordless vacuum mop", "smart water bottle",
+    "posture bra", "knee brace support", "back stretcher device",
+    "acupressure mat", "hair growth serum applicator", "teeth whitening kit",
+    "nose hair trimmer", "electric can opener", "egg cooker",
+    "air fryer liner", "silicone baking mat", "magnetic phone mount",
+    "car seat organizer kids", "dog car seat cover", "cat scratching post",
+    "bird feeder camera", "plant grow light", "humidifier diffuser",
+    "posture pillow", "compression socks", "waist trainer",
+    "yoga wheel", "massage gun",
+]
+
 # Reuses 4 of app.py's already-battle-tested BOOST_COUNTRIES (GB, CA, AU,
 # DE) + US as the anchor market, plus FR/BR/SA for non-Anglophone/non-EU
 # diversity. Drops CN (Meta is blocked in mainland China, per
@@ -74,16 +99,20 @@ SEED_KEYWORDS = [
 # real allow-list, not assumed.
 INTL_MARKETS = ["US", "GB", "CA", "AU", "DE", "FR", "BR", "SA"]
 
+# Second-tier markets for the International finder's floor-topping pass -
+# also confirmed-valid TOP_ADS_COUNTRIES values, disjoint from INTL_MARKETS.
+BACKUP_INTL_MARKETS = ["PH", "ID", "MX", "AE", "NL", "JP", "TH", "KR"]
+
 FINDER_CONCURRENCY = 2          # Meta/Playwright cap, matches app.py's BOOST_CONCURRENCY
 TIKTOK_QUERY_CONCURRENCY = 4    # Apify HTTP calls - io-bound, no Chromium involved
 
+MIN_RESULTS = 20                 # hard floor for both finders - no ceiling otherwise
 INTL_MIN_ADS = 15               # Phase-1 screen: permissive on purpose - a false
                                  # positive costs one extra ~18s India-check call, a
                                  # false negative kills a real opportunity forever.
 INDIA_MAX_ADS = 3               # "essentially untested in India" - not strictly 0,
                                  # a couple of copycat sellers doesn't mean saturated.
-TIKTOK_TOP_ADS_PER_MARKET = 15  # per INTL_MARKETS country, how many Top Ads to pull
-TIKTOK_CANDIDATE_LIMIT = 30     # cap on final displayed TikTok-sourced candidates
+TIKTOK_TOP_ADS_PER_MARKET = 15  # per market, how many Top Ads to pull
 INTL_ADS_PER_KEYWORD = 3        # how many actual ad creatives to surface per
                                  # qualifying international Meta keyword
 
@@ -108,28 +137,39 @@ def _dedupe_by_library_id(ads):
 
 # --- India finder (Meta-only, see module docstring) ---------------------
 
+def _india_meta_sweep(job_id, keywords, notes, label="Meta"):
+    ads = []
+    with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
+        futures = {ex.submit(meta_scrape.search, kw, "IN"): kw for kw in keywords}
+        done = 0
+        for fut in as_completed(futures):
+            done += 1
+            kw = futures[fut]
+            db.update_job_progress(job_id, f"{label}: scanned {done}/{len(keywords)} niches in India ({kw})")
+            try:
+                ads.extend(fut.result())
+            except Exception as e:
+                notes.append(f"Meta search failed for '{kw}': {e}")
+    return ads
+
+
 def run_india_finder(job_id):
     try:
         db.update_job_progress(job_id, "starting India finder...")
         used_meta = db.get_used_ids("meta")
-
-        ads = []
         notes = []
-        with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
-            futures = {ex.submit(meta_scrape.search, kw, "IN"): kw for kw in SEED_KEYWORDS}
-            done = 0
-            for fut in as_completed(futures):
-                done += 1
-                kw = futures[fut]
-                db.update_job_progress(job_id, f"Meta: scanned {done}/{len(SEED_KEYWORDS)} niches in India ({kw})")
-                try:
-                    ads.extend(fut.result())
-                except Exception as e:
-                    notes.append(f"Meta search failed for '{kw}': {e}")
 
+        ads = _india_meta_sweep(job_id, SEED_KEYWORDS, notes)
         ads = _dedupe_by_library_id(ads)
-        ads.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
         results = [a for a in ads if a.get("library_id") not in used_meta]
+
+        if len(results) < MIN_RESULTS:
+            db.update_job_progress(job_id, f"only {len(results)}/{MIN_RESULTS} unused results so far - topping up from backup niches...")
+            backup_ads = _india_meta_sweep(job_id, BACKUP_SEED_KEYWORDS, notes, label="Meta backfill")
+            ads = _dedupe_by_library_id(ads + backup_ads)
+            results = [a for a in ads if a.get("library_id") not in used_meta]
+
+        results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 
         if not results and notes:
             notes.insert(0, "No results because every Meta search failed - see notes below.")
@@ -140,21 +180,21 @@ def run_india_finder(job_id):
 
 # --- International finder ----------------------------------------------
 
-def _intl_meta_phase1(job_id, notes):
+def _intl_meta_phase1(job_id, notes, keywords, label="Meta"):
     """Shallow multi-country pass per niche - screens for niches with real
     international scale before paying for a deep per-niche India check."""
     qualifying = []  # list of (keyword, intl_ads)
     with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
         futures = {
             ex.submit(meta_scrape.search_world, kw, INTL_MARKETS, 4): kw
-            for kw in SEED_KEYWORDS
+            for kw in keywords
         }
         done = 0
         for fut in as_completed(futures):
             done += 1
             kw = futures[fut]
             db.update_job_progress(
-                job_id, f"Meta: screened {done}/{len(SEED_KEYWORDS)} niches internationally ({kw})"
+                job_id, f"{label}: screened {done}/{len(keywords)} niches internationally ({kw})"
             )
             try:
                 intl_ads = fut.result()
@@ -166,7 +206,7 @@ def _intl_meta_phase1(job_id, notes):
     return qualifying
 
 
-def _intl_meta_phase2(job_id, qualifying, notes):
+def _intl_meta_phase2(job_id, qualifying, notes, label="Meta"):
     """Full-depth India check, only for niches that cleared phase 1."""
     candidates = []
     with ThreadPoolExecutor(max_workers=FINDER_CONCURRENCY) as ex:
@@ -179,7 +219,7 @@ def _intl_meta_phase2(job_id, qualifying, notes):
             done += 1
             kw, intl_ads = futures[fut]
             db.update_job_progress(
-                job_id, f"Meta: India-checked {done}/{len(qualifying)} candidate niches ({kw})"
+                job_id, f"{label}: India-checked {done}/{len(qualifying)} candidate niches ({kw})"
             )
             try:
                 india_ads = fut.result()
@@ -204,21 +244,21 @@ def _intl_meta_phase2(job_id, qualifying, notes):
     return candidates
 
 
-def _intl_tiktok_phase(job_id, notes):
-    """Pulls each INTL_MARKETS country's Top Ads directly - no keyword
-    sweep needed, and no India cross-check needed either, since TikTok
-    ads structurally never run in India (see tiktok_scrape.py)."""
+def _intl_tiktok_phase(job_id, notes, markets, label="TikTok"):
+    """Pulls each market's Top Ads directly - no keyword sweep needed, and
+    no India cross-check needed either, since TikTok ads structurally
+    never run in India (see tiktok_scrape.py)."""
     candidates = []
     with ThreadPoolExecutor(max_workers=TIKTOK_QUERY_CONCURRENCY) as ex:
         futures = {
             ex.submit(tiktok_scrape.search_top_ads, market, 7, "like", TIKTOK_TOP_ADS_PER_MARKET): market
-            for market in INTL_MARKETS
+            for market in markets
         }
         done = 0
         for fut in as_completed(futures):
             done += 1
             market = futures[fut]
-            db.update_job_progress(job_id, f"TikTok: pulled Top Ads for {done}/{len(INTL_MARKETS)} markets ({market})")
+            db.update_job_progress(job_id, f"{label}: pulled Top Ads for {done}/{len(markets)} markets ({market})")
             try:
                 candidates.extend(fut.result())
             except Exception as e:
@@ -229,9 +269,7 @@ def _intl_tiktok_phase(job_id, notes):
                 # makes a single list.append atomic.
                 notes.append(f"TikTok Top Ads failed for market '{market}': {e}")
                 continue
-    candidates = _dedupe_by_library_id(candidates)
-    candidates.sort(key=lambda a: a.get("likes") or 0, reverse=True)
-    return candidates[:TIKTOK_CANDIDATE_LIMIT]
+    return candidates
 
 
 def run_international_finder(job_id):
@@ -240,8 +278,8 @@ def run_international_finder(job_id):
         notes = []
 
         with ThreadPoolExecutor(max_workers=2) as top_ex:
-            tiktok_future = top_ex.submit(_intl_tiktok_phase, job_id, notes)
-            qualifying = _intl_meta_phase1(job_id, notes)
+            tiktok_future = top_ex.submit(_intl_tiktok_phase, job_id, notes, INTL_MARKETS)
+            qualifying = _intl_meta_phase1(job_id, notes, SEED_KEYWORDS)
 
             db.update_job_progress(
                 job_id, f"Meta: {len(qualifying)} niches cleared the international bar, checking India presence..."
@@ -249,7 +287,20 @@ def run_international_finder(job_id):
             meta_candidates = _intl_meta_phase2(job_id, qualifying, notes)
             tiktok_candidates = tiktok_future.result()
 
-        results = meta_candidates + tiktok_candidates
+        results = meta_candidates + _dedupe_by_library_id(tiktok_candidates)
+
+        if len(results) < MIN_RESULTS:
+            db.update_job_progress(job_id, f"only {len(results)}/{MIN_RESULTS} results so far - topping up from backup niches/markets...")
+            with ThreadPoolExecutor(max_workers=2) as top_ex:
+                backup_tiktok_future = top_ex.submit(_intl_tiktok_phase, job_id, notes, BACKUP_INTL_MARKETS, "TikTok backfill")
+                backup_qualifying = _intl_meta_phase1(job_id, notes, BACKUP_SEED_KEYWORDS, "Meta backfill")
+                backup_meta_candidates = _intl_meta_phase2(job_id, backup_qualifying, notes, "Meta backfill")
+                backup_tiktok_candidates = backup_tiktok_future.result()
+            results += backup_meta_candidates
+            results += _dedupe_by_library_id(backup_tiktok_candidates)
+
+        results.sort(key=lambda a: a.get("likes") if a.get("likes") is not None else (a.get("days_running") or 0), reverse=True)
+
         if not results and notes:
             notes.insert(0, "No results because every Meta and/or TikTok call failed - see notes below.")
         db.finish_job(job_id, results, notes)

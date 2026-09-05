@@ -31,11 +31,20 @@ def test_main_actor_country_fallback_set():
 
 
 def test_intl_markets_are_valid_top_ads_countries():
-    # Every finder.INTL_MARKETS entry must actually be usable by
-    # tiktok_scrape.search_top_ads, or the International finder's TikTok
-    # leg silently drops that market on every run.
-    for market in finder.INTL_MARKETS:
+    # Every finder.INTL_MARKETS/BACKUP_INTL_MARKETS entry must actually be
+    # usable by tiktok_scrape.search_top_ads, or that market silently drops
+    # out of every run (primary or backfill).
+    for market in finder.INTL_MARKETS + finder.BACKUP_INTL_MARKETS:
         assert market in tiktok_scrape.TOP_ADS_COUNTRIES, market
+
+
+def test_backup_pools_are_disjoint_from_primary():
+    # The backfill pass exists to surface *different* products when the
+    # primary pass falls short of MIN_RESULTS - if a backup pool overlapped
+    # the primary one, backfilling would just re-scan the same niches/
+    # markets for no new signal.
+    assert not (set(finder.SEED_KEYWORDS) & set(finder.BACKUP_SEED_KEYWORDS))
+    assert not (set(finder.INTL_MARKETS) & set(finder.BACKUP_INTL_MARKETS))
 
 
 def test_is_stale():
@@ -63,6 +72,7 @@ if __name__ == "__main__":
     test_top_ads_rejects_india()
     test_main_actor_country_fallback_set()
     test_intl_markets_are_valid_top_ads_countries()
+    test_backup_pools_are_disjoint_from_primary()
     test_is_stale()
     test_dedupe_by_library_id()
     print("all finder tests passed")
