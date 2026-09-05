@@ -19,6 +19,14 @@ from openai import OpenAI
 
 _client = None
 
+# Confirmed live (2026-09-05): this account's models need the regional
+# endpoint - the default api.openai.com host 401s on gpt-6-astra with
+# "Attempted to access resource with incorrect regional hostname. Please
+# make your request to us.api.openai.com" - and the older models (gpt-4o)
+# work fine against this same host too, so there's no need to branch
+# per-model.
+_API_BASE_URL = "https://us.api.openai.com/v1"
+
 
 def _get_client():
     global _client
@@ -26,7 +34,7 @@ def _get_client():
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY not set - add it to .env")
-        _client = OpenAI(api_key=api_key)
+        _client = OpenAI(api_key=api_key, base_url=_API_BASE_URL)
     return _client
 
 
@@ -70,7 +78,20 @@ def fetch_product_page(url, timeout=15):
 def image_to_keyword(image_bytes, mime="image/jpeg"):
     b64 = base64.b64encode(image_bytes).decode()
     resp = _get_client().chat.completions.create(
-        model=os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini"),
+        # Deliberately NOT the flagship OPENAI_VISION_MODEL (gpt-6-astra) -
+        # confirmed live that model only accepts its default temperature
+        # (1, no override allowed), which made this step generate a
+        # meaningfully different search phrase almost every call ("Toy
+        # smartphone for kids" vs "Kids toy phone" vs "Toy phone for
+        # kids"...), and since Meta's keyword search is very sensitive to
+        # exact wording (confirmed repeatedly this session - identical
+        # products, different phrasing, wildly different result counts:
+        # 100 vs 3 vs 0), that variance directly broke this feature's
+        # reliability. This step just needs "what is this product," not
+        # maximum reasoning power - gpt-4o with temperature=0.2 (its
+        # original config) gives back a consistent, boring phrasing every
+        # time, which is exactly what a text search needs.
+        model="gpt-4o",
         messages=[{
             "role": "user",
             "content": [
@@ -81,7 +102,7 @@ def image_to_keyword(image_bytes, mime="image/jpeg"):
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
             ],
         }],
-        max_tokens=20,
+        max_completion_tokens=20,
         temperature=0.2,
     )
     return resp.choices[0].message.content.strip()
@@ -92,7 +113,7 @@ def synthesize_query(keyword=None, product_title=None, image_keyword=None):
     if len(parts) <= 1:
         return parts[0] if parts else None
     resp = _get_client().chat.completions.create(
-        model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        model="gpt-4o",  # same reasoning as image_to_keyword above
         messages=[{
             "role": "user",
             "content": (
@@ -102,7 +123,7 @@ def synthesize_query(keyword=None, product_title=None, image_keyword=None):
                 "captures the product category, suitable for searching an ad library."
             ),
         }],
-        max_tokens=20,
+        max_completion_tokens=20,
         temperature=0.2,
     )
     return resp.choices[0].message.content.strip()
@@ -128,23 +149,51 @@ def _images_match(reference_b64, reference_mime, candidate_url):
         return False
     try:
         resp = _get_client().chat.completions.create(
-            model=os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini"),
+            model=os.environ.get("OPENAI_VISION_MODEL", "gpt-6-astra"),
             messages=[{
                 "role": "user",
                 "content": [
                     {"type": "text", "text": (
-                        "Do these two images show the same physical product "
-                        "(same design/category), even if angle, color, or "
-                        "background differ? Reply with ONLY 'yes' or 'no'."
+                        "The first image is a reference product photo. The second "
+                        "image is a still frame from an ad video. Is the SPECIFIC "
+                        "same product physically shown in both - same item design, "
+                        "not just the same general category (e.g. two different "
+                        "posture correctors, or two different kids' toy phones, "
+                        "must be answered 'no' even though they're the same type "
+                        "of product) - allowing for different angle, color "
+                        "variant, lighting, or background? Confirmed live: Meta's "
+                        "video thumbnails are sometimes a blank/black loading-"
+                        "glitch frame instead of a real product frame - if either "
+                        "image is blank, solid-black, too dark, or otherwise "
+                        "doesn't clearly show a product, reply 'unclear' rather "
+                        "than guessing 'no'. Reply with ONLY one word: yes, no, "
+                        "or unclear."
                     )},
                     {"type": "image_url", "image_url": {"url": f"data:{reference_mime};base64,{reference_b64}"}},
                     {"type": "image_url", "image_url": {"url": f"data:{candidate_mime};base64,{candidate_b64}"}},
                 ],
             }],
-            max_tokens=5,
-            temperature=0,
+            # gpt-6-astra is a reasoning model - see image_to_keyword's
+            # comment. This specific check is the whole point of the
+            # "product photo" search feature, so it gets the same generous
+            # budget rather than risk a silent empty (default-False) match.
+            max_completion_tokens=1000,
         )
-        return resp.choices[0].message.content.strip().lower().startswith("y")
+        answer = resp.choices[0].message.content.strip().lower()
+        # "unclear" is treated as a rejection, same as "no" - confirmed
+        # live both ways: giving the model this third option (instead of
+        # forcing a binary yes/no) correctly stops it from guessing "no"
+        # on a genuinely blank/black loading-glitch thumbnail, but ALSO
+        # gets used for ads whose visible-but-unrelated thumbnail frame
+        # (an intro shot, a person, a scene with no product in view) isn't
+        # the product-revealing moment of the video - and including those
+        # as "matches" produced real false positives (verified: two
+        # different competitor ads whose thumbnails showed people/scenes
+        # with no product at all still passed when "unclear" counted as a
+        # match). A missed match from a bad thumbnail is a smaller problem
+        # than an irrelevant ad shown as if it were a real match - this
+        # feature's whole point is trustworthy "yes" results.
+        return answer.startswith("y")
     except Exception:
         return False
 
