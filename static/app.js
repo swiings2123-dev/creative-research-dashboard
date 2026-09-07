@@ -143,6 +143,7 @@ form.addEventListener("submit", async (e) => {
 
   lastResults = data.results;
   renderPlatformFilter(data.results);
+  renderStatusFilter(data.results);
   renderResults(data.results);
 
   if (data.results.length > 0) showGenerateButton();
@@ -159,17 +160,30 @@ const PLATFORM_LABELS = {
 const platformFilterEl = document.getElementById("platform-filter");
 let activePlatformFilter = "all";
 
+// Same category logic as statusPill() below - New/Scaling/Proven are one
+// ordinal signal (how proven is this ad), derived from days_running.
+// Ads with no days_running (TikTok's search() results never set it)
+// don't belong to any of these three, same as they get no pill.
+function statusCategory(daysRunning) {
+  if (daysRunning == null) return null;
+  if (daysRunning > 90) return "proven";
+  if (daysRunning >= 14) return "scaling";
+  return "new";
+}
+const STATUS_LABELS = { new: "New", scaling: "Scaling", proven: "Proven" };
+const statusFilterEl = document.getElementById("status-filter");
+let activeStatusFilter = "all";
+
 function renderPlatformFilter(results) {
   const counts = {};
   results.forEach((ad) => { counts[ad.platform] = (counts[ad.platform] || 0) + 1; });
   const platforms = Object.keys(counts);
+  activePlatformFilter = "all";
   if (platforms.length < 2) {
     platformFilterEl.classList.add("hidden");
     platformFilterEl.innerHTML = "";
-    activePlatformFilter = "all";
     return;
   }
-  activePlatformFilter = "all";
   platformFilterEl.classList.remove("hidden");
   const tabs = [{ key: "all", label: `All (${results.length})` }].concat(
     platforms.map((p) => ({ key: p, label: `${PLATFORM_LABELS[p] || p} (${counts[p]})` }))
@@ -181,12 +195,52 @@ function renderPlatformFilter(results) {
     btn.addEventListener("click", () => {
       activePlatformFilter = btn.dataset.platform;
       platformFilterEl.querySelectorAll(".filter-tab").forEach((b) => b.classList.toggle("active", b === btn));
-      const filtered = activePlatformFilter === "all"
-        ? lastResults
-        : lastResults.filter((ad) => ad.platform === activePlatformFilter);
-      renderResults(filtered);
+      applyFilters();
     });
   });
+}
+
+function renderStatusFilter(results) {
+  const counts = { new: 0, scaling: 0, proven: 0 };
+  results.forEach((ad) => {
+    const cat = statusCategory(ad.days_running);
+    if (cat) counts[cat] += 1;
+  });
+  const present = Object.keys(counts).filter((k) => counts[k] > 0);
+  activeStatusFilter = "all";
+  if (present.length < 2) {
+    statusFilterEl.classList.add("hidden");
+    statusFilterEl.innerHTML = "";
+    return;
+  }
+  statusFilterEl.classList.remove("hidden");
+  const tabs = [{ key: "all", label: `All statuses (${results.length})` }].concat(
+    present.map((k) => ({ key: k, label: `${STATUS_LABELS[k]} (${counts[k]})` }))
+  );
+  statusFilterEl.innerHTML = tabs
+    .map((t) => `<button type="button" class="filter-tab${t.key === "all" ? " active" : ""}" data-status="${t.key}">${t.label}</button>`)
+    .join("");
+  statusFilterEl.querySelectorAll(".filter-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      activeStatusFilter = btn.dataset.status;
+      statusFilterEl.querySelectorAll(".filter-tab").forEach((b) => b.classList.toggle("active", b === btn));
+      applyFilters();
+    });
+  });
+}
+
+// Platform and status filters apply together (AND, not either/or) - a
+// click on either one re-runs both against the full unfiltered result
+// set, rather than each tab computing its own filtered list independently.
+function applyFilters() {
+  let filtered = lastResults;
+  if (activePlatformFilter !== "all") {
+    filtered = filtered.filter((ad) => ad.platform === activePlatformFilter);
+  }
+  if (activeStatusFilter !== "all") {
+    filtered = filtered.filter((ad) => statusCategory(ad.days_running) === activeStatusFilter);
+  }
+  renderResults(filtered);
 }
 
 function cardOptsFor() {
@@ -455,6 +509,7 @@ function pollFinderJob(jobId, mode) {
     lastResults = results;
     lastKeyword = mode === "india" ? "trending in India" : "international opportunity";
     renderPlatformFilter(results);
+    renderStatusFilter(results);
     renderResults(results);
     if (results.length > 0) showGenerateButton();
   }, 4000);

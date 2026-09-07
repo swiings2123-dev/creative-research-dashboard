@@ -23,7 +23,7 @@ uses, since both are Apify actors.
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import requests
 
 RUN_URL = "https://api.apify.com/v2/actors/apify~facebook-ads-scraper/run-sync-get-dataset-items"
@@ -150,28 +150,43 @@ def _parse_item(item, country):
     }
 
 
+def _video_path(video_url):
+    """fbcdn.net video URLs carry a signed/session query string
+    (_nc_cat, oh, oe, etc) that legitimately differs between separate
+    fetches of the literal same file - confirmed live: searching the same
+    keyword across 3 countries returned 20 groups of ads with different
+    library_id AND different full video_url, but an IDENTICAL URL path,
+    i.e. the same underlying video file re-issued under what Meta treats
+    as a distinct per-country ad record. Comparing the path (stripping
+    the query string) catches these as the duplicates they visually are;
+    comparing the full URL does not."""
+    return urlparse(video_url).path if video_url else None
+
+
 def _dedupe(ads):
-    # library_id is the primary key, but Facebook's own "collation"
-    # grouping (variant_count) doesn't always merge every instance of the
-    # same underlying creative into one record - two different
-    # adArchiveIDs can carry the literal same video_url (confirmed
-    # possible: collationCount groups *some* variants, not necessarily
-    # all). Deduping on video_url too catches that case, since that's the
-    # actual "is this the same creative" signal a viewer cares about.
+    # library_id is the primary key, but two different real problems both
+    # produce ads that are visually the same video under a different id:
+    # (1) Facebook's own "collation" grouping (variant_count) doesn't
+    # always merge every instance of the same creative into one record,
+    # and (2) the same underlying video can get a distinct library_id per
+    # country when it's swept via search_world (see _video_path above).
+    # Deduping on the video's URL path in addition to library_id catches
+    # both, since that's the actual "is this the same creative" signal a
+    # viewer cares about - not Meta's internal record-keeping.
     seen_ids = set()
-    seen_video_urls = set()
+    seen_paths = set()
     out = []
     for a in ads:
         lib_id = a["library_id"]
-        video_url = a.get("video_url")
+        path = _video_path(a.get("video_url"))
         if lib_id and lib_id in seen_ids:
             continue
-        if video_url and video_url in seen_video_urls:
+        if path and path in seen_paths:
             continue
         if lib_id:
             seen_ids.add(lib_id)
-        if video_url:
-            seen_video_urls.add(video_url)
+        if path:
+            seen_paths.add(path)
         out.append(a)
     return out
 

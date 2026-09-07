@@ -27,6 +27,7 @@ match what the API actually accepts):
 """
 
 import os
+from urllib.parse import urlparse
 import requests
 
 RUN_URL = "https://api.apify.com/v2/actors/lexis-solutions~tiktok-ads-scraper/run-sync-get-dataset-items"
@@ -79,21 +80,30 @@ def _post(url, payload, timeout_s):
     return items
 
 
+def _video_path(video_url):
+    """TikTok's CDN video URLs also carry a signed/session query string
+    (bti, ft, mime_type, etc) that can differ between separate fetches of
+    the literal same file - same issue confirmed live on the Meta side
+    (meta_scrape.py's _video_path), fixed the same way here: compare the
+    URL path, not the full URL with its per-fetch signing tokens."""
+    return urlparse(video_url).path if video_url else None
+
+
 def _dedupe(ads):
     seen_ids = set()
-    seen_video_urls = set()
+    seen_paths = set()
     out = []
     for a in ads:
         lib_id = a.get("library_id")
-        video_url = a.get("video_url")
+        path = _video_path(a.get("video_url"))
         if lib_id and lib_id in seen_ids:
             continue
-        if video_url and video_url in seen_video_urls:
+        if path and path in seen_paths:
             continue
         if lib_id:
             seen_ids.add(lib_id)
-        if video_url:
-            seen_video_urls.add(video_url)
+        if path:
+            seen_paths.add(path)
         out.append(a)
     return out
 

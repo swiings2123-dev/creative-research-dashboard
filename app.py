@@ -69,18 +69,21 @@ def _require_secret():
 
 def _dedupe_cross_source(results):
     """meta_scrape/tiktok_scrape already dedupe within their own source
-    (by library_id and video_url) - this is a final safety net across the
-    combined Meta+TikTok list, keyed on video_url only (library_id
-    namespaces aren't shared between platforms, so that key alone isn't
-    meaningful cross-source)."""
+    (by library_id and video URL path) - this is a final safety net
+    across the combined Meta+TikTok list, keyed on the video URL's path
+    only (library_id namespaces aren't shared between platforms, so that
+    key alone isn't meaningful cross-source). Path, not the full URL -
+    confirmed live that fbcdn.net/tiktokcdn.com URLs carry a signed query
+    string that can differ between fetches of the literal same file (see
+    meta_scrape.py's _video_path)."""
     seen = set()
     out = []
     for r in results:
-        video_url = r.get("video_url")
-        if video_url and video_url in seen:
+        path = urlparse(r.get("video_url") or "").path or None
+        if path and path in seen:
             continue
-        if video_url:
-            seen.add(video_url)
+        if path:
+            seen.add(path)
         out.append(r)
     return out
 
