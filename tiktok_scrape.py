@@ -98,7 +98,7 @@ def _dedupe(ads):
     return out
 
 
-def search(keyword, country="all", max_pages=0, timeout_s=180):
+def search(keyword, country="all", max_pages=20, timeout_s=280):
     # This actor only covers the EU/EEA + UK/CH transparency database (see
     # module docstring) - most of this app's country dropdown (US, IN, AE,
     # CN, AU, CA, SA, PH, ID, BR, MX) isn't a valid value here at all, and
@@ -106,9 +106,22 @@ def search(keyword, country="all", max_pages=0, timeout_s=180):
     # unsupported instead of erroring out the whole /search request over a
     # country this actor was never going to have data for regardless.
     actor_country = country if country in MAIN_ACTOR_COUNTRIES else "all"
-    # max_pages=0 means "all available pages" per the actor's own docs
-    # (capped at TikTok's own 300-page/12-ads-per-page hard limit) - no
-    # artificial ceiling below that.
+    # NOT 0, and not higher than 20 either: the actor's own docs say
+    # max_pages=0 means "all available pages" (up to TikTok's 300-page
+    # hard limit), which reads like "no cap" - confirmed LIVE that it
+    # isn't safe to actually use: a real call with max_pages=0 ran long
+    # enough to hit a connection reset and never returned anything
+    # (exactly the "zero results every time" symptom this caused in
+    # production). 25 looked like a safe one-step-further value after
+    # 5/10/20 all completed reliably (40/71/140 results in 77s/83s/105s),
+    # but confirmed LIVE that it isn't: a repeat call at max_pages=25 hit
+    # a 280s read timeout and returned zero results - the exact same
+    # failure mode as 0, just slower to arrive. 20 is the largest value
+    # with multiple consistent clean completions, no failures - depth is
+    # a cost/latency tradeoff, but a value that sometimes returns zero
+    # isn't "more depth," it's the original bug with different timing.
+    # timeout_s raised to 280 anyway for margin (Render has repeatedly
+    # measured slower than local for other calls this session).
     items = _post(RUN_URL, {
         "query": keyword,
         "maxPages": max_pages,
