@@ -15,9 +15,14 @@ EXPOSE 8000
 
 # --timeout 300: World-mode and picture-mode searches run several minutes -
 # gunicorn's 30s default worker timeout would kill them mid-request.
-# -w 1: one process - each request may hold a full Chromium instance in
-# memory, more processes needs proportionally more RAM on whatever plan
-# runs this.
+# -w 1: one process. Originally set because every Meta/TikTok request held
+# a full Chromium instance in memory - Meta and TikTok are both plain
+# Apify HTTP calls now (see meta_scrape.py/tiktok_scrape.py), so that's no
+# longer true for them; google_lookup.py's separate domain-lookup feature
+# is the only remaining Chromium user, and it's called far less often than
+# /search. Left at 1 for now rather than bundled into an unrelated bugfix
+# pass - revisit if throughput under concurrent /search + /finder load
+# actually becomes a bottleneck.
 # --worker-class gthread --threads 4: with the default sync worker, a
 # single long /search request fully occupies the one worker, so Render's
 # health-check ping to "/" gets no response during it. Threads let this

@@ -17,11 +17,9 @@ search in app.py's /search route.
 
 Both guarantee at least MIN_RESULTS items (no ceiling otherwise) by
 backfilling from a second keyword/market pool when the primary pass comes
-up short - the same "boost-fill" idea app.py's /search already uses for
-Meta (MIN_TARGET_RESULTS/BOOST_COUNTRIES), applied here to niches/markets
-instead of countries. This matters most for the India finder once you've
-been marking products used for a while - the unused pool naturally
-shrinks, so a fixed 40-keyword sweep alone can eventually fall short.
+up short. This matters most for the India finder once you've been
+marking products used for a while - the unused pool naturally shrinks,
+so a fixed 40-keyword sweep alone can eventually fall short.
 
 Both run as background threads (see app.py's /finder/start) since a deep
 run takes minutes, not seconds - see db.py's finder_jobs table for how
@@ -90,9 +88,9 @@ BACKUP_SEED_KEYWORDS = [
     "yoga wheel", "massage gun",
 ]
 
-# Reuses 4 of app.py's already-battle-tested BOOST_COUNTRIES (GB, CA, AU,
-# DE) + US as the anchor market, plus FR/BR/SA for non-Anglophone/non-EU
-# diversity. Drops CN (Meta is blocked in mainland China, per
+# US as the anchor market, GB/CA/AU/DE as major established markets,
+# plus FR/BR/SA for non-Anglophone/non-EU diversity. Drops CN (Meta is
+# blocked in mainland China, per
 # meta_scrape.py's own WORLD_COUNTRIES comment - pure wasted scroll time
 # here). All 8 are also confirmed-valid TOP_ADS_COUNTRIES values for the
 # TikTok leg (tiktok_scrape.search_top_ads) - checked against the actor's

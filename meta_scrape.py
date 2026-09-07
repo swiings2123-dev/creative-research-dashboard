@@ -47,8 +47,19 @@ WORLD_COUNTRIES = [
     "US", "GB", "AE", "CN", "IN", "AU", "CA", "SA", "DE", "PH", "ID", "BR", "MX",
 ]
 
-WORLD_CONCURRENCY = 6  # plain HTTP calls to Apify, not Chromium - safe well above
-                       # the old 2-instance Playwright cap
+# All of WORLD_COUNTRIES fits in one batch - matters more than it looks:
+# /search's WORLD mode is one synchronous request with no async-job
+# pattern (unlike finder.py), so its total wall time has to stay under
+# gunicorn's 300s --timeout or the whole request dies. With the old
+# WORLD_CONCURRENCY=6 (a leftover from when each call was a memory-heavy
+# Chromium instance, capped in app.py's BOOST_CONCURRENCY days), 13
+# countries needed 3 sequential batches of up to 6 - confirmed live that
+# just 3 countries with no per-country limit already took 280.6s, right
+# at that same timeout's edge. Plain HTTP calls to Apify have no such
+# memory ceiling, so there's no reason left to force multiple batches -
+# one batch bounds total time to roughly the slowest single country's
+# response instead of 2-3x that.
+WORLD_CONCURRENCY = 15
 
 
 def _token():
@@ -165,13 +176,26 @@ def _dedupe(ads):
     return out
 
 
-def search(keyword, country="US", results_limit=None, timeout_s=280):
+def search(keyword, country="US", results_limit=500, timeout_s=280):
     """Single-country search via the Apify actor - resultsLimit controls
     depth directly (no scroll/plateau heuristics needed, the actor handles
-    its own pagination). results_limit=None (the default) means no cap -
-    every genuinely active matching ad, not capped for the sake of it;
-    pass an explicit value to bound cost/latency for a specific caller
-    (see finder.py's screening phases, which don't need exhaustive depth)."""
+    its own pagination).
+
+    Default is 500, a bounded number, NOT None/omitted - deliberate,
+    after tiktok_scrape.py's near-identical actor flag ("0 = all
+    available pages", which reads exactly like "no cap") turned out to
+    hang and get its connection forcibly reset in production instead of
+    actually being safe to use, causing TikTok to return zero results
+    every time. This actor's own docs make the same "blank = unlimited"
+    claim for resultsLimit - not trusted by default here either, without
+    independent live confirmation. 500 itself IS that confirmation:
+    tested live and completed cleanly (408 results in 133.6s, well
+    inside the 280s budget) - takes a while, which briefly looked like a
+    hang before it actually finished, but a bounded explicit number
+    behaves nothing like TikTok's unbounded sentinel value did. Passing
+    results_limit=None still omits the field entirely if a caller
+    genuinely wants to try Apify's own "unlimited" behavior, but that's
+    opt-in, not the default anyone gets by just calling search()."""
     url = SEARCH_URL.format(country=country, keyword=quote(keyword))
     payload = {
         "startUrls": [{"url": url}],
@@ -184,7 +208,7 @@ def search(keyword, country="US", results_limit=None, timeout_s=280):
     return _dedupe([a for a in ads if a])
 
 
-def search_world(keyword, countries=None, results_limit_per_country=None, timeout_s=280):
+def search_world(keyword, countries=None, results_limit_per_country=100, timeout_s=280):
     """Runs one actor call per market concurrently - plain HTTP requests,
     not Chromium instances, so there's no OOM ceiling to respect here the
     way meta_scrape.py's old Playwright version had."""
