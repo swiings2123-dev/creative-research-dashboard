@@ -258,6 +258,19 @@ function renderCard(ad, index, opts = {}) {
     body.addEventListener("click", () => window.open(ad.permalink, "_blank"));
   }
 
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "download-btn";
+  downloadBtn.textContent = "⬇ Download";
+  downloadBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    downloadVideo(ad, downloadBtn);
+  });
+  actions.appendChild(downloadBtn);
+
   if (opts.onMarkUsed) {
     const markBtn = document.createElement("button");
     markBtn.type = "button";
@@ -269,10 +282,41 @@ function renderCard(ad, index, opts = {}) {
       markBtn.textContent = "Marking...";
       opts.onMarkUsed(ad, card);
     });
-    card.appendChild(markBtn);
+    actions.appendChild(markBtn);
   }
 
+  card.appendChild(actions);
+
   return card;
+}
+
+// Browsers won't honor a plain <a download> for a cross-origin video -
+// Facebook/TikTok's CDN doesn't send Content-Disposition, so a direct
+// link just opens/plays it instead of saving it. Fetching through our
+// own /download proxy (same-origin from the browser's perspective) and
+// saving the response as a blob sidesteps that.
+async function downloadVideo(ad, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Downloading...";
+  try {
+    const res = await fetch(API_BASE + "/download?url=" + encodeURIComponent(ad.video_url), { headers: authHeaders });
+    if (!res.ok) throw new Error("download failed");
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `${(ad.advertiser || ad.platform || "ad").replace(/[^a-z0-9]+/gi, "_")}_${ad.library_id || Date.now()}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    alert("Download failed - try again in a moment.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 function escapeHtml(str) {

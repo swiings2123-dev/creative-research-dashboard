@@ -254,9 +254,14 @@ button[type=submit]:active { transform: scale(0.97); }
   font-weight: 600;
 }
 
-.mark-used-btn {
+.card-actions {
   margin-top: 0.6rem;
-  width: 100%;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.download-btn, .mark-used-btn {
+  flex: 1;
   border: 1px solid var(--border);
   background: var(--bg-soft);
   color: var(--text);
@@ -267,8 +272,8 @@ button[type=submit]:active { transform: scale(0.97); }
   cursor: pointer;
   transition: background .15s ease, border-color .15s ease;
 }
-.mark-used-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
-.mark-used-btn:disabled { opacity: 0.6; cursor: default; }
+.download-btn:hover, .mark-used-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.download-btn:disabled, .mark-used-btn:disabled { opacity: 0.6; cursor: default; }
 
 .status {
   text-align: center;

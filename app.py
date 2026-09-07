@@ -3,8 +3,9 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 import requests
-from flask import Flask, render_template, request, jsonify, abort
+from flask import Flask, render_template, request, jsonify, abort, Response
 
 import db
 import finder
@@ -55,6 +56,7 @@ def _add_cors_headers(resp):
 @app.route("/finder/start", methods=["OPTIONS"])
 @app.route("/finder/status/<job_id>", methods=["OPTIONS"])
 @app.route("/finder/mark-used", methods=["OPTIONS"])
+@app.route("/download", methods=["OPTIONS"])
 def _cors_preflight(job_id=None):
     return "", 204
 
@@ -63,6 +65,24 @@ def _require_secret():
     expected = os.environ.get("APP_SHARED_SECRET")
     if expected and request.headers.get("X-App-Secret") != expected:
         abort(401, description="missing or invalid X-App-Secret header")
+
+
+def _dedupe_cross_source(results):
+    """meta_scrape/tiktok_scrape already dedupe within their own source
+    (by library_id and video_url) - this is a final safety net across the
+    combined Meta+TikTok list, keyed on video_url only (library_id
+    namespaces aren't shared between platforms, so that key alone isn't
+    meaningful cross-source)."""
+    seen = set()
+    out = []
+    for r in results:
+        video_url = r.get("video_url")
+        if video_url and video_url in seen:
+            continue
+        if video_url:
+            seen.add(video_url)
+        out.append(r)
+    return out
 
 
 def _cached_search(source, fn, keyword, country, *args):
@@ -188,6 +208,7 @@ def search():
             if err:
                 errors[source] = err
 
+    results = _dedupe_cross_source(results)
     results.sort(key=lambda r: ((r.get("days_running") or 0), r.get("variant_count") or 1), reverse=True)
 
     product_match_checked = None
@@ -264,6 +285,37 @@ def finder_mark_used():
         return jsonify({"error": "platform and external_id required"}), 400
     db.mark_used(platform, external_id)
     return jsonify({"ok": True})
+
+
+# Video CDN hosts this proxy will fetch from - kept to an allowlist so
+# this route can't be used as an open proxy for arbitrary URLs.
+DOWNLOAD_ALLOWED_HOST_SUFFIXES = ("fbcdn.net", "tiktokcdn.com", "tiktokcdn-us.com")
+
+
+@app.route("/download", methods=["GET"])
+def download_video():
+    _require_secret()
+    url = request.args.get("url") or ""
+    host = (urlparse(url).hostname or "").lower()
+    if not url or not any(host == s or host.endswith("." + s) for s in DOWNLOAD_ALLOWED_HOST_SUFFIXES):
+        abort(400, description="url not allowed")
+
+    # Browsers won't honor a plain <a download> for a cross-origin video -
+    # Facebook/TikTok's CDN doesn't send Content-Disposition, so a direct
+    # link just opens/plays the video instead of saving it. Proxying
+    # through our own origin (streamed, not buffered in memory) sidesteps
+    # that entirely - the browser only ever talks to us.
+    try:
+        upstream = requests.get(url, stream=True, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+        upstream.raise_for_status()
+    except Exception as e:
+        abort(502, description=f"could not fetch video: {e}")
+
+    return Response(
+        upstream.iter_content(chunk_size=65536),
+        content_type=upstream.headers.get("Content-Type", "video/mp4"),
+        headers={"Content-Disposition": 'attachment; filename="ad.mp4"'},
+    )
 
 
 @app.route("/lookup-advertiser", methods=["POST"])

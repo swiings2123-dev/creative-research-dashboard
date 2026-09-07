@@ -79,7 +79,26 @@ def _post(url, payload, timeout_s):
     return items
 
 
-def search(keyword, country="all", max_pages=1, timeout_s=180):
+def _dedupe(ads):
+    seen_ids = set()
+    seen_video_urls = set()
+    out = []
+    for a in ads:
+        lib_id = a.get("library_id")
+        video_url = a.get("video_url")
+        if lib_id and lib_id in seen_ids:
+            continue
+        if video_url and video_url in seen_video_urls:
+            continue
+        if lib_id:
+            seen_ids.add(lib_id)
+        if video_url:
+            seen_video_urls.add(video_url)
+        out.append(a)
+    return out
+
+
+def search(keyword, country="all", max_pages=0, timeout_s=180):
     # This actor only covers the EU/EEA + UK/CH transparency database (see
     # module docstring) - most of this app's country dropdown (US, IN, AE,
     # CN, AU, CA, SA, PH, ID, BR, MX) isn't a valid value here at all, and
@@ -87,6 +106,9 @@ def search(keyword, country="all", max_pages=1, timeout_s=180):
     # unsupported instead of erroring out the whole /search request over a
     # country this actor was never going to have data for regardless.
     actor_country = country if country in MAIN_ACTOR_COUNTRIES else "all"
+    # max_pages=0 means "all available pages" per the actor's own docs
+    # (capped at TikTok's own 300-page/12-ads-per-page hard limit) - no
+    # artificial ceiling below that.
     items = _post(RUN_URL, {
         "query": keyword,
         "maxPages": max_pages,
@@ -109,7 +131,7 @@ def search(keyword, country="all", max_pages=1, timeout_s=180):
             "permalink": None,
             "library_id": it.get("adId"),
         })
-    return results
+    return _dedupe(results)
 
 
 def search_top_ads(country, period_days=7, order_by="like", max_items=50, timeout_s=180):
@@ -169,4 +191,4 @@ def search_top_ads(country, period_days=7, order_by="like", max_items=50, timeou
             "likes": likes,
             "evidence": f"🔥 Top ad in {country} · {likes:,} likes (TikTok ads don't run in India)" if likes else f"🔥 Top ad in {country} (TikTok ads don't run in India)",
         })
-    return results
+    return _dedupe(results)

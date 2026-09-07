@@ -140,31 +140,51 @@ def _parse_item(item, country):
 
 
 def _dedupe(ads):
-    seen = set()
+    # library_id is the primary key, but Facebook's own "collation"
+    # grouping (variant_count) doesn't always merge every instance of the
+    # same underlying creative into one record - two different
+    # adArchiveIDs can carry the literal same video_url (confirmed
+    # possible: collationCount groups *some* variants, not necessarily
+    # all). Deduping on video_url too catches that case, since that's the
+    # actual "is this the same creative" signal a viewer cares about.
+    seen_ids = set()
+    seen_video_urls = set()
     out = []
     for a in ads:
-        if a["library_id"] and a["library_id"] not in seen:
-            seen.add(a["library_id"])
-            out.append(a)
+        lib_id = a["library_id"]
+        video_url = a.get("video_url")
+        if lib_id and lib_id in seen_ids:
+            continue
+        if video_url and video_url in seen_video_urls:
+            continue
+        if lib_id:
+            seen_ids.add(lib_id)
+        if video_url:
+            seen_video_urls.add(video_url)
+        out.append(a)
     return out
 
 
-def search(keyword, country="US", results_limit=100, timeout_s=280):
+def search(keyword, country="US", results_limit=None, timeout_s=280):
     """Single-country search via the Apify actor - resultsLimit controls
     depth directly (no scroll/plateau heuristics needed, the actor handles
-    its own pagination), so raising it is just a straightforward cost/
-    depth tradeoff instead of a timing-sensitive guess."""
+    its own pagination). results_limit=None (the default) means no cap -
+    every genuinely active matching ad, not capped for the sake of it;
+    pass an explicit value to bound cost/latency for a specific caller
+    (see finder.py's screening phases, which don't need exhaustive depth)."""
     url = SEARCH_URL.format(country=country, keyword=quote(keyword))
-    items = _post({
+    payload = {
         "startUrls": [{"url": url}],
-        "resultsLimit": results_limit,
         "activeStatus": "active",
-    }, timeout_s)
+    }
+    if results_limit is not None:
+        payload["resultsLimit"] = results_limit
+    items = _post(payload, timeout_s)
     ads = [_parse_item(it, country) for it in items]
     return _dedupe([a for a in ads if a])
 
 
-def search_world(keyword, countries=None, results_limit_per_country=40, timeout_s=280):
+def search_world(keyword, countries=None, results_limit_per_country=None, timeout_s=280):
     """Runs one actor call per market concurrently - plain HTTP requests,
     not Chromium instances, so there's no OOM ceiling to respect here the
     way meta_scrape.py's old Playwright version had."""
