@@ -1,7 +1,7 @@
 import React from 'react';
 
 /**
- * VidLens mark: a lens (magnifier) with a play button inside — "finding videos".
+ * Reelscope mark: a lens (magnifier) with a play button inside — "finding videos".
  * Drawn in `currentColor` so it can sit on the lime tile (dark glyph) or on dark backgrounds.
  */
 export function LogoMark({ size = 22, className, style }) {

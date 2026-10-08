@@ -1906,7 +1906,7 @@ body::before {
   }
 }
 
-/* VidLens wordmark accent ("Lens") */
+/* Reelscope wordmark accent ("Scope") */
 .logo-accent {
   color: var(--accent-primary);
   -webkit-text-fill-color: var(--accent-primary);

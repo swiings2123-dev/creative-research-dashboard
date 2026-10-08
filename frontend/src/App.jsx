@@ -132,7 +132,7 @@ export default function App() {
       const unreachable = err instanceof TypeError;
       setErrorMsg(
         unreachable
-          ? "Can't reach the VidLens server. Make sure the backend is running (npm run dev in /backend) and try again."
+          ? "Can't reach the Reelscope server. Make sure the backend is running (npm run dev in /backend) and try again."
           : err.message || 'Failed to initiate search'
       );
     }

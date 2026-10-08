@@ -1,4 +1,4 @@
-# 🎥 VidLens — Product Video Discovery Dashboard
+# 🎥 Reelscope — Product Video Discovery Dashboard
 
 > **Full-Stack AI Automation & Video Discovery Dashboard**  
 > Built with Node.js (Express), React (Vite), SQLite, Apify Scrapers, and Google Gemini Vision AI.
@@ -7,7 +7,7 @@
 
 ## 📌 Executive Overview
 
-VidLens is an intelligent video discovery pipeline that accepts a **product keyword** or **live e-commerce URL** (Shopify, Amazon, DTC brand site) and discovers at least **40 relevant short-form videos**:
+Reelscope is an intelligent video discovery pipeline that accepts a **product keyword** or **live e-commerce URL** (Shopify, Amazon, DTC brand site) and discovers at least **40 relevant short-form videos**:
 
 A **product photo upload** is supported as a third input (JPEG/PNG/WebP, downscaled to 800px in the browser). With a photo alone, the Image Brain identifies the product and titles the search; a photo plus text uses the text as the title.
 - **20 Instagram Reels**
@@ -125,21 +125,15 @@ Open **`http://localhost:5173`** in your browser.
 
 ---
 
-## ☁️ Deploy to Render (free)
+## ☁️ Deployment: Render (API) + Vercel (UI)
 
-The repo includes a [`render.yaml`](render.yaml) Blueprint: one web service that builds the React UI and serves it from the Express API.
+The backend is a persistent Express server (it streams progress over SSE), so it runs on Render; the React UI is a static Vite build on Vercel.
 
-1. Sign in at [render.com](https://render.com) with GitHub.
-2. **New → Blueprint**, pick this repository, click **Apply**.
-3. When asked, paste `APIFY_API_TOKEN` and `GEMINI_API_KEY`.
-4. Wait for the build (~3–5 min); the app is served at `https://vidlens-xxxx.onrender.com`.
+1. **Backend** (Render → New → Blueprint, pick this repo → uses [`render.yaml`](render.yaml)): paste `APIFY_API_TOKEN` and `GEMINI_API_KEY` when asked. Note the resulting URL, e.g. `https://creative-research-worker.onrender.com`.
+2. **Frontend** (Vercel → New Project, root directory `frontend`): build `npm run build`, output `dist`, env var `VITE_API_BASE=https://creative-research-worker.onrender.com/api`.
+3. Back on Render, set `FRONTEND_URL=https://your-app.vercel.app` (comma-separated if more than one) so CORS allows the deployed frontend, and redeploy.
 
-Keys can be changed later under the service's **Environment** tab (save → the service restarts). The free plan has no persistent disk, so the SQLite database resets on restart; the recorded demo searches are loaded automatically on an empty database (set `SEED_DEMO=false` to disable). Free services sleep after inactivity, so the first request can take ~1 minute.
-
-### Alternative: frontend and backend hosted separately
-1. **Backend first** (Render → New → Web Service): root directory `backend`, build `npm install`, start `node src/server.js`, env vars `APIFY_API_TOKEN`, `GEMINI_API_KEY`, `NODE_ENV=production`. Note its URL, e.g. `https://vidlens-api.onrender.com`.
-2. **Frontend** (Vercel/Netlify): root directory `frontend`, build `npm run build`, output `dist`, env var `VITE_API_BASE=https://vidlens-api.onrender.com/api`.
-3. Back on the backend, set `FRONTEND_URL=https://your-frontend.vercel.app` so CORS allows it, and redeploy.
+Keys can be changed later under the Render service's **Environment** tab (save → the service restarts). The free plan has no persistent disk, so the SQLite database resets on restart; the recorded demo searches are loaded automatically on an empty database (set `SEED_DEMO=false` to disable). Free services sleep after inactivity, so the first request can take ~1 minute.
 
 ---
 

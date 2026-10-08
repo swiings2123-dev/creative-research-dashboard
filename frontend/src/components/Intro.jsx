@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import IntroCore from './IntroCore';
 
-const NAME = 'VIDLENS';
-const ACCENT_FROM = 3; // "LENS" is drawn in the accent colour
+const NAME = 'REELSCOPE';
+const ACCENT_FROM = 4; // "SCOPE" is drawn in the accent colour
 const GLYPHS = '#%&*+=/<>?@$01';
 const LOAD_MS = 1700;
 const EXIT_MS = 950;

@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 
 // Use a throwaway SQLite file (each test file runs in its own process)
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vidlens-test-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reelscope-test-'));
 process.env.DB_PATH = path.join(tmpDir, 'test.db');
 
 const db = require('../db/queries');

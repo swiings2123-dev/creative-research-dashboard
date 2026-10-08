@@ -1,11 +1,12 @@
-# Render Blueprint: one web service that builds the React UI and serves it from the Express API.
-# Deploy: Render dashboard -> New -> Blueprint -> pick this repo, then fill in the two API keys.
+# Render Blueprint: API-only backend. The React UI is deployed separately on Vercel
+# (frontend/), which talks to this service via VITE_API_BASE.
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo, then fill in the API keys.
 services:
   - type: web
     name: creative-research-worker
     runtime: node
     plan: free
-    buildCommand: cd frontend && npm install && npm run build && cd ../backend && npm install --omit=dev
+    buildCommand: cd backend && npm install --omit=dev
     startCommand: cd backend && node src/server.js
     healthCheckPath: /api/health
     envVars:
@@ -19,3 +20,6 @@ services:
         sync: false
       - key: ENABLE_TIKTOK
         value: "false"
+      # Vercel frontend origin(s), comma-separated - required for CORS
+      - key: FRONTEND_URL
+        sync: false
