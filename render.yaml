@@ -2,7 +2,7 @@
 # Deploy: Render dashboard -> New -> Blueprint -> pick this repo, then fill in the two API keys.
 services:
   - type: web
-    name: vidlens
+    name: creative-research-worker
     runtime: node
     plan: free
     buildCommand: cd frontend && npm install && npm run build && cd ../backend && npm install --omit=dev
