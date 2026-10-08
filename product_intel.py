@@ -3,10 +3,17 @@ Turns a product link and/or product photo into a clean ad-library search
 query, and (when a reference product image is available) visually verifies
 that a candidate ad thumbnail actually shows the same product.
 
-Product pages are read with a plain HTTP GET, not a browser - og:title/
-og:image meta tags are meant for social-media crawlers, so they're almost
-always present in the raw server-rendered HTML even on JS-heavy storefronts
-(Shopify etc.), no Playwright needed here.
+Product pages are loaded with a real browser (Playwright), not a plain
+HTTP GET - confirmed live (2026-09-16) that Amazon.in actively blocks
+plain requests.get() with a deliberate bot-detection page (title is
+literally "Amazon.in", no real content, an explicit "automated access"
+notice in the HTML) rather than erroring out, so the old code silently
+resolved every Amazon link to the brand name instead of the actual
+product - not a wrong-but-recoverable response, a different page
+entirely. A real browser context gets the genuine product page instead
+(confirmed against a live Amazon.in listing). Most other storefronts
+(Shopify etc.) don't need this, but there's no reliable way to know
+which sites do without trying, and a browser fetch works for both.
 """
 
 import os
@@ -16,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from openai import OpenAI
+from playwright.sync_api import sync_playwright
 
 _client = None
 
@@ -63,15 +71,52 @@ class _OGParser(HTMLParser):
             self._in_title = False
 
 
-def fetch_product_page(url, timeout=15):
-    resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    parser = _OGParser()
-    parser.feed(resp.text[:400000])
+# Sites that don't expose og:image/twitter:image at all - confirmed live
+# that Amazon.in is one of these (no image meta tags whatsoever) - fall
+# back to the actual product-image element on the page.
+_FALLBACK_IMAGE_SELECTORS = [
+    "#landingImage",         # Amazon
+    "#imgTagWrapperId img",  # Amazon, alternate layout
+]
+
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def fetch_product_page(url, timeout_ms=30000):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--disable-dev-shm-usage", "--disable-gpu"])
+        page = browser.new_page(locale="en-US", user_agent=_BROWSER_USER_AGENT)
+        page.goto(url, timeout=timeout_ms)
+        # Fixed wait, not wait_for_selector - the target elements differ
+        # per site (this function is used on arbitrary storefront URLs),
+        # so there's no one selector to wait on; this only needs enough
+        # time for the page's own JS to finish rendering title/image
+        # content into the DOM before reading it.
+        page.wait_for_timeout(1500)
+        html = page.content()
+
+        parser = _OGParser()
+        parser.feed(html[:400000])
+
+        image_url = parser.tags.get("og:image") or parser.tags.get("twitter:image")
+        if not image_url:
+            for selector in _FALLBACK_IMAGE_SELECTORS:
+                try:
+                    image_url = page.eval_on_selector(selector, "el => el.src")
+                except Exception:
+                    continue
+                if image_url:
+                    break
+
+        browser.close()
+
     return {
         "title": parser.tags.get("og:title") or parser.tags.get("twitter:title") or parser.title,
         "description": parser.tags.get("og:description"),
-        "image_url": parser.tags.get("og:image") or parser.tags.get("twitter:image"),
+        "image_url": image_url,
     }
 
 
