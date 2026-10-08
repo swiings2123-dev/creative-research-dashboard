@@ -4,9 +4,54 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const { parseImageDataUrl, describeImage } = require('../utils/imageUpload');
 const NodeCache = require('node-cache');
+const { StructuredOutputParser } = require('@langchain/core/output_parsers');
+const { z } = require('zod');
 
 // Cache image analysis results for 2 hours
 const analysisCache = new NodeCache({ stdTTL: 7200 });
+
+// Schema-validate Gemini's JSON instead of a bare JSON.parse(). Every
+// field uses .catch(default) rather than a strict type, deliberately:
+// confirmed live that a naive strict schema is a real regression versus
+// the code it replaces - normalizeAnalysis()'s own cleanValue/cleanList
+// helpers already tolerate a single wrong-typed field (e.g. Gemini
+// returning colors as a string instead of an array) by defaulting just
+// that field, while keeping every other correctly-typed field (brand,
+// productType, etc) intact. A strict schema instead invalidates the
+// WHOLE object over one bad field, discarding good data a basic
+// JSON.parse + the old defensive accessors would have kept. .catch()
+// .catch() preserves that same per-field tolerance. What this still genuinely adds
+// over the old bare JSON.parse(): text that isn't valid JSON at all
+// (truncated, stray prose) throws an OutputParserException, same as
+// JSON.parse did - now explicit via LangChain rather than relying on
+// JSON.parse's own exception, and consistent with the array schema
+// below, which does need a real type check (see its own comment).
+const imageAnalysisParser = StructuredOutputParser.fromZodSchema(z.object({
+  productType: z.string().catch(''),
+  colors: z.array(z.string()).catch([]),
+  patterns: z.array(z.string()).catch([]),
+  brand: z.string().catch(''),
+  textOnProduct: z.array(z.string()).catch([]),
+  material: z.string().catch(''),
+  shape: z.string().catch(''),
+  keyFeatures: z.array(z.string()).catch([]),
+  searchQueries: z.array(z.string()).catch([]),
+  hashtags: z.array(z.string()).catch([]),
+  metaAdKeywords: z.array(z.string()).catch([]),
+}));
+
+// z.coerce.number() (not z.number()): the per-row loop below already did
+// Number(row.index)/Number(row.score) - coercing "2" to 2 the same way,
+// not rejecting it. A strict z.number() would fail Zod's per-item
+// validation on ANY array item with a coercible-but-not-strictly-numeric
+// value, invalidating the whole batch (and falling back ALL of its
+// videos to heuristic scoring) over one row the old code would have
+// happily used.
+const videoScoreParser = StructuredOutputParser.fromZodSchema(z.array(z.object({
+  index: z.coerce.number(),
+  score: z.coerce.number(),
+  reason: z.string().catch(''),
+})));
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -104,7 +149,7 @@ async function analyzeProductImage(imageUrl, productTitle = '', productDescripti
     const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error('Empty response from Gemini');
 
-    const analysis = JSON.parse(text);
+    const analysis = await imageAnalysisParser.parse(text);
     const result = normalizeAnalysis(analysis, productTitle);
 
     analysisCache.set(cacheKey, result);
@@ -220,7 +265,7 @@ Respond with a JSON array only: [{"index": <video index>, "score": <0-100>, "rea
     );
 
     const text = (response.data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
-    const parsed = JSON.parse(text);
+    const parsed = await videoScoreParser.parse(text);
     const out = new Array(videos.length).fill(null);
 
     for (const row of Array.isArray(parsed) ? parsed : []) {

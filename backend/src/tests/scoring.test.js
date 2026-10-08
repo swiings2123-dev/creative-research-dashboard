@@ -1,8 +1,10 @@
-const { describe, it } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
+const axios = require('axios');
+const config = require('../config');
 
 // Tests run against the real scoring helpers exported by the image brain
-const { scoreCaptionRelevance, scoreVideoHeuristic } = require('../services/imageBrain');
+const { scoreCaptionRelevance, scoreVideoHeuristic, analyzeProductImage, scoreVideos } = require('../services/imageBrain');
 const { brandedProduct } = require('../utils/queryText');
 const { parseImageDataUrl } = require('../utils/imageUpload');
 
@@ -99,5 +101,76 @@ describe('Uploaded image validation', () => {
     assert.strictEqual(parseImageDataUrl('data:text/html;base64,PGh0bWw+'), null);
     assert.strictEqual(parseImageDataUrl('https://example.com/a.png'), null);
     assert.strictEqual(parseImageDataUrl(42), null);
+  });
+});
+
+// Gemini's JSON response is schema-validated (StructuredOutputParser) rather than a
+// bare JSON.parse(). Each test sets axios.post to its own self-contained mock (no
+// variable shared across tests) and restores it afterwards - node:test can run
+// sibling `it`s concurrently by default, and a shared mutable mock response was
+// confirmed live to cause real cross-test interference (one test's response
+// leaking into another's assertions) when these were written as a single shared
+// beforeEach mock instead.
+describe('Gemini response schema validation', () => {
+  let originalPost;
+  let originalKey;
+
+  beforeEach(() => {
+    originalPost = axios.post;
+    originalKey = config.geminiApiKey;
+    // config.geminiApiKey is read from process.env once at module-load time
+    // (see src/config/index.js) - confirmed live that setting the env var
+    // here has no effect, since config was already required (and its
+    // snapshot taken) before this test file's imports even finish. Mutate
+    // the already-loaded config object directly instead.
+    config.geminiApiKey = 'fake-key-for-test';
+  });
+
+  afterEach(() => {
+    axios.post = originalPost;
+    config.geminiApiKey = originalKey;
+  });
+
+  it('passes through a fully valid response unchanged', async () => {
+    const text = JSON.stringify({ productType: 'running shoe', colors: ['red', 'white'], brand: 'Nike', searchQueries: ['red nike shoes'] });
+    axios.post = async () => ({ data: { candidates: [{ content: { parts: [{ text }] } }] } });
+    const result = await analyzeProductImage(null, 'Schema test: fully valid', '');
+    assert.strictEqual(result.isFallback, undefined);
+    assert.strictEqual(result.attributes.brand, 'Nike');
+    assert.deepStrictEqual(result.attributes.colors, ['red', 'white']);
+  });
+
+  it('keeps correctly-typed fields and defaults only the bad one, instead of discarding the whole response', async () => {
+    // colors is a string, not an array - the kind of single-field slip a stricter
+    // schema would reject outright, throwing away the correctly-identified brand too.
+    const text = JSON.stringify({ productType: 'earbuds', colors: 'black', brand: 'Sony', searchQueries: ['sony earbuds'] });
+    axios.post = async () => ({ data: { candidates: [{ content: { parts: [{ text }] } }] } });
+    const result = await analyzeProductImage(null, 'Schema test: one bad field', '');
+    assert.strictEqual(result.isFallback, undefined, 'a single bad field should not trigger full heuristic fallback');
+    assert.strictEqual(result.attributes.brand, 'Sony');
+    assert.deepStrictEqual(result.attributes.colors, []);
+  });
+
+  it('falls back to heuristic analysis on genuinely malformed (non-JSON) text', async () => {
+    const text = '{"productType": "truncated';
+    axios.post = async () => ({ data: { candidates: [{ content: { parts: [{ text }] } }] } });
+    const result = await analyzeProductImage(null, 'Schema test: truncated', '');
+    assert.strictEqual(result.isFallback, true);
+  });
+
+  it('coerces string index/score in video-scoring responses instead of rejecting the batch', async () => {
+    const text = JSON.stringify([
+      { index: '0', score: '85', reason: 'matches' },
+      { index: '1', score: '20', reason: 'different brand' },
+    ]);
+    axios.post = async () => ({ data: { candidates: [{ content: { parts: [{ text }] } }] } });
+    const videos = [
+      { platform: 'instagram', caption: 'red nike shoes', author: 'a', thumbnailUrl: null },
+      { platform: 'instagram', caption: 'blue adidas shoes', author: 'b', thumbnailUrl: null },
+    ];
+    const scored = await scoreVideos(videos, { attributes: { productType: 'shoe' }, searchQueries: ['nike shoes'] });
+    assert.strictEqual(scored[0].matchScore, 85);
+    assert.strictEqual(scored[1].matchScore, 20);
+    assert.ok(scored[0].matchReason.startsWith('AI:'), 'should use the AI score, not fall back to heuristic');
   });
 });
