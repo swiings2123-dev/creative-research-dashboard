@@ -1,0 +1,32 @@
+{
+  "name": "product-video-discovery-backend",
+  "version": "1.0.0",
+  "description": "Node.js backend for Product Video Discovery Dashboard",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test src/tests/deduplication.test.js src/tests/scoring.test.js src/tests/previouslySeen.test.js",
+    "seed:demo": "node scripts/seedRecorded.js",
+    "postinstall": "npm rebuild better-sqlite3"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "keywords": ["video-discovery", "instagram", "meta-ads", "apify"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "apify-client": "^2.0.0",
+    "axios": "^1.7.0",
+    "better-sqlite3": "^11.0.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "node-cache": "^5.1.2",
+    "uuid": "^10.0.0",
+    "winston": "^3.14.0"
+  }
+}

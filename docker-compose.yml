@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - APIFY_API_TOKEN=${APIFY_API_TOKEN:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ENABLE_TIKTOK=${ENABLE_TIKTOK:-false}
+    volumes:
+      - discovery-data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  discovery-data:

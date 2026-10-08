@@ -1,19 +1,21 @@
+# Render Blueprint: one web service that builds the React UI and serves it from the Express API.
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo, then fill in the two API keys.
 services:
   - type: web
-    name: creative-research-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile
+    name: vidlens
+    runtime: node
     plan: free
+    buildCommand: cd frontend && npm install && npm run build && cd ../backend && npm install --omit=dev
+    startCommand: cd backend && node src/server.js
+    healthCheckPath: /api/health
     envVars:
-      - key: OPENAI_API_KEY
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: APIFY_API_TOKEN
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-4o
-      - key: OPENAI_VISION_MODEL
-        value: gpt-6-astra
-      - key: APP_SHARED_SECRET
+      - key: GEMINI_API_KEY
         sync: false
-      - key: ALLOWED_ORIGIN
-        value: https://creative-research.vercel.app
-      - key: APIFY_TOKEN
-        sync: false
+      - key: ENABLE_TIKTOK
+        value: "false"

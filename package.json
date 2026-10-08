@@ -1,0 +1,21 @@
+{
+  "name": "product-video-discovery-dashboard",
+  "version": "1.0.0",
+  "description": "Product Video Discovery Dashboard — Instagram Reels & Meta Ad Library with AI Vision Matching",
+  "scripts": {
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev": "node -e \"const { spawn } = require('child_process'); spawn('npm', ['run', 'dev'], { cwd: 'backend', stdio: 'inherit', shell: true }); spawn('npm', ['run', 'dev'], { cwd: 'frontend', stdio: 'inherit', shell: true });\"",
+    "start": "node -e \"const { spawn } = require('child_process'); spawn('npm', ['start'], { cwd: 'backend', stdio: 'inherit', shell: true }); spawn('npm', ['run', 'dev'], { cwd: 'frontend', stdio: 'inherit', shell: true });\"",
+    "test": "npm --prefix backend test"
+  },
+  "keywords": [
+    "product-video-discovery",
+    "apify",
+    "gemini-vision",
+    "instagram-reels",
+    "meta-ad-library"
+  ],
+  "author": "",
+  "license": "ISC"
+}
